@@ -345,13 +345,13 @@ public class ImageService {
 
   public Gateway selectGateway(String model, String size) {
     String preferredGroup = groupForSize(size);
-    List<Gateway> gateways = db.enabledGatewaysForModel(model).stream()
-      .filter(item -> groupMatches(item.upstreamGroup(), preferredGroup))
+    List<Gateway> all = db.enabledGatewaysForModel(model).stream()
       .filter(item -> resolveGatewayApiKey(item, false) != null)
       .toList();
-    return gateways.stream().findFirst()
-      .orElseThrow(() -> AppException.unavailable("NO_AVAILABLE_GATEWAY",
-        preferredGroup == null ? "没有可用默认渠道" : "没有可用 " + preferredGroup + " 渠道"));
+    // Try preferred group first, then fall back to any available group
+    return all.stream().filter(item -> groupMatches(item.upstreamGroup(), preferredGroup)).findFirst()
+      .or(() -> all.stream().findFirst())
+      .orElseThrow(() -> AppException.unavailable("NO_AVAILABLE_GATEWAY", "没有可用渠道，请稍后重试"));
   }
 
   public String resolveGatewayApiKey(Gateway gateway) {
