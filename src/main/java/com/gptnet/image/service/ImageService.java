@@ -566,7 +566,7 @@ public class ImageService {
     String value = cleanFormString(rawValue);
     boolean is4k = "超清(4k)".equals(quality) || "high".equals(quality);
     boolean isSquare = value.isBlank() || "自动".equals(value) || "Auto".equals(value) || "auto".equals(value) || "1:1".equals(value);
-    if (isSquare) return is4k ? "3840x3840" : "2048x2048";
+    if (isSquare) return "2048x2048";  // no 4K square supported by API
     if ("16:9".equals(value)) return is4k ? "3840x2160" : "2048x1152";
     if ("9:16".equals(value)) return is4k ? "2160x3840" : "1152x2048";
     return value;
