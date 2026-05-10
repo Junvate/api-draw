@@ -96,13 +96,26 @@
                 </div>
               </div>
 
-              <div class="history-panel" id="historyPanel">
-                <div class="history-panel-head">
-                  <span>生成历史</span>
-                  <button id="refreshJobs" type="button">刷新</button>
+              <div class="bottom-panels">
+                <div class="history-panel" id="historyPanel">
+                  <div class="history-panel-head">
+                    <span>生成历史</span>
+                    <button id="refreshJobs" type="button">刷新</button>
+                  </div>
+                  <div class="history-panel-body">
+                    <div class="gateway-list" id="jobList"></div>
+                  </div>
                 </div>
-                <div class="history-panel-body">
-                  <div class="gateway-list" id="jobList"></div>
+                <div class="credits-panel" id="creditsPanel">
+                  <div class="history-panel-head">
+                    <span>积分明细</span>
+                  </div>
+                  <div class="credits-panel-body" id="creditsPanelBody">
+                    <div class="credits-loading">加载中…</div>
+                  </div>
+                  <div class="credits-panel-foot">
+                    <button type="button" id="creditsPanelLoadMore" class="ghost-action hidden">加载更多</button>
+                  </div>
                 </div>
               </div>
             </aside>

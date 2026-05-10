@@ -341,12 +341,68 @@ a { color: inherit; }
 }
 
 /* History panel — docked to bottom of primary-composer */
-.history-panel {
+/* Bottom panels row — history + credits side by side */
+.bottom-panels {
   flex-shrink: 0;
   border-top: 1px solid var(--line-soft);
   display: flex;
-  flex-direction: column;
   max-height: 280px;
+  min-height: 0;
+}
+
+.history-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line-soft);
+}
+
+.credits-panel {
+  width: 160px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.credits-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #c8d3df transparent;
+  padding: 0 8px 4px;
+  font-size: 12px;
+}
+
+.credits-panel-foot {
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+
+.credits-panel-body .credits-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-soft);
+  gap: 4px;
+}
+.credits-panel-body .credits-entry-left {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.credits-panel-body .credits-entry-right {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .history-panel-head {

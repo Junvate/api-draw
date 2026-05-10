@@ -308,6 +308,7 @@ function updateAccount(user) {
     $("adminSummary").textContent = "";
     $("gatewayList").replaceChildren();
   }
+  document.dispatchEvent(new CustomEvent("accountUpdated", { detail: user }));
 }
 
 function updateTask() {
@@ -1160,4 +1161,31 @@ refreshMe().then(async (user) => {
   $("creditsDrawerClose").addEventListener("click", close);
   $("creditsDrawerBackdrop").addEventListener("click", close);
   $("creditsLoadMore").addEventListener("click", () => loadHistory(true));
+
+  // ── 内嵌积分面板 ──
+  let panelOffset = 0;
+  const PANEL_PAGE = 30;
+
+  async function loadPanel(append) {
+    const body = $("creditsPanelBody");
+    if (!append) { panelOffset = 0; body.innerHTML = '<div class="credits-loading">加载中…</div>'; }
+    try {
+      const { entries } = await api(`/api/credits/history?limit=${PANEL_PAGE}&offset=${panelOffset}`);
+      panelOffset += entries.length;
+      if (!append) body.innerHTML = "";
+      if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);font-size:11px;padding:8px">暂无记录</p>'; return; }
+      entries.forEach((e) => {
+        const row = document.createElement("div");
+        row.className = "credits-entry";
+        row.innerHTML = `<div class="credits-entry-left" title="${reasonLabel(e.reason)}">${reasonLabel(e.reason)}</div><div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
+        body.appendChild(row);
+      });
+      $("creditsPanelLoadMore").classList.toggle("hidden", entries.length < PANEL_PAGE);
+    } catch { if (!append) body.innerHTML = '<p style="text-align:center;color:var(--muted);font-size:11px;padding:8px">加载失败</p>'; }
+  }
+
+  $("creditsPanelLoadMore").addEventListener("click", () => loadPanel(true));
+
+  document.addEventListener("accountUpdated", (e) => { if (e.detail) loadPanel(false); });
+  if (state.user) loadPanel(false);
 })();
