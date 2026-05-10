@@ -1899,6 +1899,18 @@ bindFilter("gatewayProviderFilter", renderGateways);
 bindFilter("userSearch", renderUsers);
 bindFilter("jobSearch", renderJobs);
 bindFilter("jobStatusFilter", renderJobs);
+
+$("exportErrorLogs").addEventListener("click", () => {
+  const failed = state.jobs.filter((j) => j.status === "failed");
+  if (!failed.length) { showToast("没有失败任务", "info"); return; }
+  const cols = ["id", "createdAt", "userEmail", "model", "gatewayId", "errorCode", "errorMessage", "prompt"];
+  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [cols.join(","), ...failed.map((j) => cols.map((c) => escape(j[c])).join(","))].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `error-logs-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+});
 bindFilter("codeSearch", renderCodes);
 bindFilter("codeStatusFilter", renderCodes);
 bindFilter("auditSearch", renderAudit);
