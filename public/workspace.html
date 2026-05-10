@@ -23,6 +23,7 @@
         <nav class="switcher" aria-label="工作区切换">
           <button class="active" id="workspaceTab" type="button">创作</button>
           <button id="historyTab" type="button">历史</button>
+          <button id="creditsTab" type="button">积分明细</button>
         </nav>
 
         <div class="status-row">
@@ -106,17 +107,6 @@
                     <div class="gateway-list" id="jobList"></div>
                   </div>
                 </div>
-                <div class="credits-panel" id="creditsPanel">
-                  <div class="history-panel-head">
-                    <span>积分明细</span>
-                  </div>
-                  <div class="credits-panel-body" id="creditsPanelBody">
-                    <div class="credits-loading">加载中…</div>
-                  </div>
-                  <div class="credits-panel-foot">
-                    <button type="button" id="creditsPanelLoadMore" class="ghost-action hidden">加载更多</button>
-                  </div>
-                </div>
               </div>
             </aside>
 
@@ -189,6 +179,18 @@
           </div>
         </section>
 
+        <section class="credits-view hidden" id="creditsView">
+          <div class="credits-view-head">
+            <span>积分明细</span>
+          </div>
+          <div class="credits-view-body" id="creditsViewBody">
+            <div class="credits-loading">加载中…</div>
+          </div>
+          <div class="credits-view-foot">
+            <button type="button" id="creditsViewLoadMore" class="ghost-action hidden">加载更多</button>
+          </div>
+        </section>
+
         <aside class="panel right-panel assistant-panel">
           <section class="suggest-card redeem-card">
             <div class="suggest-heading account-heading">
@@ -252,7 +254,6 @@
       <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
     </div>
 
-    <script src="./script.js"></script>
   <div class="credits-drawer hidden" id="creditsDrawer" role="dialog" aria-modal="true" aria-label="积分明细">
     <div class="credits-drawer-backdrop" id="creditsDrawerBackdrop"></div>
     <div class="credits-drawer-panel">
@@ -268,5 +269,6 @@
       </div>
     </div>
   </div>
+    <script src="./script.js"></script>
   </body>
 </html>

@@ -925,7 +925,15 @@ promptForm.addEventListener("submit", async (event) => {
 });
 
 imageUpload.addEventListener("change", () => {
-  const files = Array.from(imageUpload.files || []).slice(0, 3);
+  const MAX = 10 * 1024 * 1024;
+  const all = Array.from(imageUpload.files || []);
+  const oversized = all.filter(f => f.size > MAX);
+  if (oversized.length) {
+    showToast(`图片过大（最大 10MB）：${oversized.map(f => f.name).join("、")}`, "error");
+    imageUpload.value = "";
+    return;
+  }
+  const files = all.slice(0, 3);
   clearThumbPreviews();
   state.referenceFiles = files;
   state.refs = files.length;
@@ -1046,18 +1054,33 @@ $("loadAdmin").addEventListener("click", async (event) => {
 
 $("workspaceTab").addEventListener("click", () => {
   setActive(switcherButtons, $("workspaceTab"));
+  $("creditsView").classList.add("hidden");
+  document.querySelector(".studio-panel").classList.remove("hidden");
+  document.querySelector(".assistant-panel").classList.remove("hidden");
   promptInput.focus();
 });
 
 $("historyTab").addEventListener("click", async () => {
   if (!state.user) return openAuthDialog("登录后可查看生成历史");
   setActive(switcherButtons, $("historyTab"));
+  $("creditsView").classList.add("hidden");
+  document.querySelector(".studio-panel").classList.remove("hidden");
+  document.querySelector(".assistant-panel").classList.remove("hidden");
   const jobs = await refreshJobs();
   if (jobs[0]) {
     renderResultCard(jobs[0], { silent: true });
     if (isPendingStatus(jobs[0].status)) startJobPolling(jobs[0].id, { showCompletionToast: false });
   }
   $("historyPanel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+});
+
+$("creditsTab").addEventListener("click", () => {
+  if (!state.user) return openAuthDialog("登录后可查看积分明细");
+  setActive(switcherButtons, $("creditsTab"));
+  document.querySelector(".studio-panel").classList.add("hidden");
+  document.querySelector(".assistant-panel").classList.add("hidden");
+  $("creditsView").classList.remove("hidden");
+  window.creditsViewLoad(false);
 });
 
 $("redeemForm").addEventListener("submit", async (event) => {
@@ -1162,30 +1185,36 @@ refreshMe().then(async (user) => {
   $("creditsDrawerBackdrop").addEventListener("click", close);
   $("creditsLoadMore").addEventListener("click", () => loadHistory(true));
 
-  // ── 内嵌积分面板 ──
-  let panelOffset = 0;
-  const PANEL_PAGE = 30;
+  // ── 积分明细标签页 ──
+  let viewOffset = 0;
+  const VIEW_PAGE = 50;
 
-  async function loadPanel(append) {
-    const body = $("creditsPanelBody");
-    if (!append) { panelOffset = 0; body.innerHTML = '<div class="credits-loading">加载中…</div>'; }
+  async function creditsViewLoad(append) {
+    const body = $("creditsViewBody");
+    if (!append) { viewOffset = 0; body.innerHTML = '<div class="credits-loading">加载中…</div>'; }
     try {
-      const { entries } = await api(`/api/credits/history?limit=${PANEL_PAGE}&offset=${panelOffset}`);
-      panelOffset += entries.length;
+      const { entries } = await api(`/api/credits/history?limit=${VIEW_PAGE}&offset=${viewOffset}`);
+      viewOffset += entries.length;
       if (!append) body.innerHTML = "";
-      if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);font-size:11px;padding:8px">暂无记录</p>'; return; }
+      if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);padding:20px">暂无记录</p>'; return; }
       entries.forEach((e) => {
         const row = document.createElement("div");
         row.className = "credits-entry";
-        row.innerHTML = `<div class="credits-entry-left" title="${reasonLabel(e.reason)}">${reasonLabel(e.reason)}</div><div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
+        const thumb = e.resultUrl ? `<img class="credits-thumb" src="${e.resultUrl}" loading="lazy" alt="">` : `<div class="credits-thumb-placeholder"></div>`;
+        row.innerHTML = `
+          <div class="credits-entry-left">${thumb}</div>
+          <div class="credits-entry-mid">
+            <div class="credits-entry-reason">${reasonLabel(e.reason)}</div>
+            ${e.prompt ? `<div class="credits-entry-prompt">${e.prompt.slice(0, 60)}${e.prompt.length > 60 ? '…' : ''}</div>` : ''}
+            <div class="credits-entry-time">${new Date(e.createdAt).toLocaleString('zh-CN')}</div>
+          </div>
+          <div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
         body.appendChild(row);
       });
-      $("creditsPanelLoadMore").classList.toggle("hidden", entries.length < PANEL_PAGE);
-    } catch { if (!append) body.innerHTML = '<p style="text-align:center;color:var(--muted);font-size:11px;padding:8px">加载失败</p>'; }
+      $("creditsViewLoadMore").classList.toggle("hidden", entries.length < VIEW_PAGE);
+    } catch { if (!append) body.innerHTML = '<p style="text-align:center;color:var(--red,#e53e3e);padding:20px">加载失败</p>'; }
   }
 
-  $("creditsPanelLoadMore").addEventListener("click", () => loadPanel(true));
-
-  document.addEventListener("accountUpdated", (e) => { if (e.detail) loadPanel(false); });
-  if (state.user) loadPanel(false);
+  window.creditsViewLoad = creditsViewLoad;
+  $("creditsViewLoadMore").addEventListener("click", () => creditsViewLoad(true));
 })();

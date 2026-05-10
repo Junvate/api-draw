@@ -269,6 +269,10 @@ a { color: inherit; }
   margin: 0 auto;
 }
 
+.simplified-workspace:has(.assistant-panel.hidden) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ============================================================
    Studio Panel  (section.studio-panel)
    Full-height card: header on top, creation-layout fills rest
@@ -341,7 +345,7 @@ a { color: inherit; }
 }
 
 /* History panel — docked to bottom of primary-composer */
-/* Bottom panels row — history + credits side by side */
+/* Bottom panels row — history */
 .bottom-panels {
   flex-shrink: 0;
   border-top: 1px solid var(--line-soft);
@@ -355,54 +359,47 @@ a { color: inherit; }
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--line-soft);
 }
 
-.credits-panel {
-  width: 160px;
-  flex-shrink: 0;
+/* Credits full-panel view (third tab) */
+.credits-view {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+  align-self: stretch;
+  grid-column: 1 / -1;
+  height: calc(100vh - var(--topbar-h) - 38px);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
-.credits-panel-body {
+.credits-view-head {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.credits-view-body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #c8d3df transparent;
-  padding: 0 8px 4px;
-  font-size: 12px;
+  padding: 0 20px 8px;
 }
 
-.credits-panel-foot {
-  padding: 4px 8px;
+.credits-view-foot {
+  padding: 8px 20px;
   flex-shrink: 0;
-}
-
-.credits-panel-body .credits-entry {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--line-soft);
-  gap: 4px;
-}
-.credits-panel-body .credits-entry-left {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.credits-panel-body .credits-entry-right {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
+  border-top: 1px solid var(--line-soft);
 }
 
 .history-panel-head {
