@@ -1,13 +1,14 @@
 import { Inject, Module, OnModuleInit } from "@nestjs/common";
 import { AuthController } from "./auth.controller.js";
 import { AuthService } from "./auth.service.js";
+import { CaptchaService } from "./captcha.service.js";
 import { AdminGuard } from "./guards/admin.guard.js";
 import { ApiKeyGuard } from "./guards/api-key.guard.js";
 import { SessionGuard } from "./guards/session.guard.js";
 
 @Module({
   controllers: [AuthController],
-  providers: [AuthService, SessionGuard, AdminGuard, ApiKeyGuard],
+  providers: [AuthService, CaptchaService, SessionGuard, AdminGuard, ApiKeyGuard],
   exports: [AuthService, SessionGuard, AdminGuard, ApiKeyGuard],
 })
 export class AuthModule implements OnModuleInit {

@@ -223,7 +223,7 @@ export class OperationsController {
   async redeem(@Req() req: AuthedRequest, @Body() body: { code: string }) {
     const code = String(body.code || "").trim().toUpperCase();
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
+    const added = await this.prisma.$transaction(async (tx) => {
       const record = await tx.redemptionCode.findUniqueOrThrow({ where: { code } });
       if (
         !record.active ||
@@ -235,7 +235,8 @@ export class OperationsController {
       }
       await tx.redemptionCode.update({ where: { id: record.id }, data: { usedBy: [...record.usedBy, req.user!.id] } });
       await tx.walletEntry.create({ data: { userId: req.user!.id, amount: record.credits, reason: "redeem_code", refId: record.id, actorId: req.user!.id } });
+      return record.credits;
     });
-    return { credits: await this.prisma.walletBalance(req.user!.id), added: record.credits };
+    return { credits: await this.prisma.walletBalance(req.user!.id), added };
   }
 }

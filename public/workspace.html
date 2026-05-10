@@ -23,7 +23,7 @@
         <nav class="switcher" aria-label="工作区切换">
           <button class="active" id="workspaceTab" type="button">创作</button>
           <button id="historyTab" type="button">历史</button>
-          <button id="creditsTab" type="button">积分明细</button>
+          <button id="creditsTab" type="button">积分</button>
         </nav>
 
         <div class="status-row">
@@ -31,10 +31,9 @@
             <span>账号</span>
             <strong id="accountName">未登录</strong>
           </div>
-          <div class="status-card">
+          <div class="status-card credit-status-card" id="creditStatusCard" role="button" tabindex="0" title="查看积分明细">
             <span>积分</span>
             <strong class="credit-balance"><span class="credit-star" aria-hidden="true"></span><span id="creditBalance">0</span></strong>
-            <button class="credit-history-btn" id="creditHistoryBtn" type="button" title="积分明细">明细</button>
           </div>
           <a class="top-action buy-credits-btn hidden" id="buyCreditsBtn" target="_blank" rel="noreferrer">购买积分</a>
           <button class="top-action" id="loginButton">登录</button>
@@ -240,8 +239,22 @@
             <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required />
           </label>
           <label>
+            重复密码
+            <input id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="8" />
+          </label>
+          <label>
             昵称
             <input id="authName" placeholder="注册时可填写" />
+          </label>
+          <label>
+            验证码
+            <div class="captcha-row">
+              <input id="authCaptchaCode" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="one-time-code" placeholder="4 位数字" />
+              <button class="captcha-refresh" id="refreshCaptcha" type="button" aria-label="刷新验证码">
+                <img id="captchaImage" alt="注册验证码" />
+              </button>
+            </div>
+            <input id="authCaptchaId" type="hidden" />
           </label>
           <div class="auth-actions">
             <button type="button" id="closeAuth">取消</button>
@@ -251,7 +264,7 @@
         </form>
       </dialog>
 
-      <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
+      <div class="toast-stack" id="toastStack" popover="manual" aria-live="polite" aria-atomic="true"></div>
     </div>
 
   <div class="credits-drawer hidden" id="creditsDrawer" role="dialog" aria-modal="true" aria-label="积分明细">

@@ -1,9 +1,10 @@
-import { Body, ConflictException, Controller, ForbiddenException, Get, Inject, Post, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Inject, Post, Req, Res, UnauthorizedException } from "@nestjs/common";
 import { Response } from "express";
 import { PrismaService } from "../core/prisma.service.js";
 import { SecurityService } from "../core/security.service.js";
 import { AuthedRequest } from "../../common/http-types.js";
 import { AuthService } from "./auth.service.js";
+import { CaptchaService } from "./captcha.service.js";
 import { LoginDto, RegisterDto } from "./dto.js";
 
 @Controller("api")
@@ -12,11 +13,21 @@ export class AuthController {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SecurityService) private readonly security: SecurityService,
     @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(CaptchaService) private readonly captcha: CaptchaService,
   ) {}
+
+  @Get("auth/captcha")
+  captchaImage() {
+    return this.captcha.create();
+  }
 
   @Post("auth/register")
   async register(@Body() body: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const email = body.email.trim().toLowerCase();
+    if (body.password !== body.passwordConfirm) {
+      throw new BadRequestException({ error: "PASSWORD_CONFIRM_MISMATCH", message: "两次输入的密码不一致" });
+    }
+    this.captcha.verify(body.captchaId, body.captchaCode);
     const exists = await this.prisma.user.findUnique({ where: { email } });
     if (exists) throw new ConflictException({ error: "EMAIL_EXISTS", message: "邮箱已注册" });
     const user = await this.prisma.user.create({

@@ -74,6 +74,9 @@ public class AuthService {
   @Transactional
   public User register(RegisterRequest body, HttpServletResponse response) {
     String email = cleanEmail(body.getEmail());
+    if (!String.valueOf(body.getPassword()).equals(String.valueOf(body.getPasswordConfirm()))) {
+      throw AppException.badRequest("PASSWORD_CONFIRM_MISMATCH", "两次输入的密码不一致");
+    }
     if (db.userByEmail(email).isPresent()) {
       throw AppException.conflict("EMAIL_EXISTS", "邮箱已注册");
     }

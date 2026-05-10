@@ -213,6 +213,23 @@ a { color: inherit; }
   background: var(--surface);
 }
 
+.status-card.credit-status-card {
+  min-width: 74px;
+  cursor: pointer;
+  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+
+.status-card.credit-status-card:hover,
+.status-card.credit-status-card:focus-visible {
+  border-color: #c0cad6;
+  background: var(--surface-2);
+}
+
+.status-card.credit-status-card:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(26,111,196,.1);
+}
+
 .status-card span   { font-size: 10px; font-weight: 600; color: var(--muted); line-height: 1.1; }
 .status-card strong {
   font-size: 13px; font-weight: 700; color: var(--ink);
@@ -1416,12 +1433,29 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
    ============================================================ */
 .toast-stack {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  top: 16px;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
   display: grid;
   gap: 6px;
-  z-index: 50;
+  z-index: 2147483647;
   pointer-events: none;
+}
+
+.toast-stack:popover-open {
+  position: fixed;
+  inset: 16px auto auto 50%;
+  width: max-content;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  transform: translateX(-50%);
 }
 
 .toast {
@@ -1510,6 +1544,33 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
   border-color: var(--accent);
   background: #fff;
   box-shadow: 0 0 0 3px rgba(26,111,196,.09);
+}
+
+.captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  gap: 8px;
+}
+
+.captcha-refresh {
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.captcha-refresh:hover {
+  border-color: #c0cad6;
+  background: var(--surface-2);
+}
+
+.captcha-refresh img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .auth-actions {
@@ -1661,7 +1722,18 @@ button.is-loading { position: relative; cursor: wait; }
   .result-actions { margin-left: 0; }
   .result-link { width: 100%; }
 
-  .toast-stack { left: 12px; right: 12px; bottom: 12px; }
+  .toast-stack {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    bottom: auto;
+    transform: none;
+  }
+  .toast-stack:popover-open {
+    inset: 12px 12px auto 12px;
+    width: auto;
+    transform: none;
+  }
   .toast { width: 100%; max-width: none; }
 
   .auth-dialog { width: min(100%, calc(100vw - 24px)); }
@@ -1673,14 +1745,6 @@ button.is-loading { position: relative; cursor: wait; }
     transition-duration: .01ms !important;
   }
 }
-
-/* ── 积分明细按钮 ── */
-.credit-history-btn {
-  background: none; border: 1px solid var(--border, #e2e8f0); border-radius: 6px;
-  padding: 2px 8px; font-size: 12px; cursor: pointer; color: var(--muted, #718096);
-  margin-left: 4px;
-}
-.credit-history-btn:hover { background: var(--surface, #f7fafc); }
 
 /* ── 积分明细抽屉 ── */
 .credits-drawer { position: fixed; inset: 0; z-index: 1000; display: flex; justify-content: flex-end; }

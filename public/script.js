@@ -79,6 +79,9 @@ const imageUpload = $("imageUpload");
 const referenceTray = $("referenceTray");
 const clearReferences = $("clearReferences");
 const authDialog = $("authDialog");
+const captchaImage = $("captchaImage");
+const authCaptchaId = $("authCaptchaId");
+const authCaptchaCode = $("authCaptchaCode");
 const promptCounter = $("promptCounter");
 const composerToggle = $("composerToggle");
 const composerRail = $("composerRail");
@@ -623,6 +626,9 @@ function showNotice(message) {
 
 function showToast(message, type = "info") {
   const stack = $("toastStack");
+  if (typeof stack.showPopover === "function" && !stack.matches(":popover-open")) {
+    try { stack.showPopover(); } catch {}
+  }
   while (stack.children.length >= 3) stack.firstElementChild?.remove();
   const toast = document.createElement("div");
   toast.className = `toast ${type}`;
@@ -634,8 +640,14 @@ function showToast(message, type = "info") {
     const animation = typeof toast.animate === "function"
       ? toast.animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(8px)" }], { duration: 180, easing: "ease-in" })
       : null;
-    if (animation) animation.onfinish = () => toast.remove();
-    else toast.remove();
+    const removeToast = () => {
+      toast.remove();
+      if (!stack.children.length && typeof stack.hidePopover === "function" && stack.matches(":popover-open")) {
+        try { stack.hidePopover(); } catch {}
+      }
+    };
+    if (animation) animation.onfinish = removeToast;
+    else removeToast();
   }, type === "error" ? 4200 : 2600);
 }
 
@@ -706,20 +718,41 @@ async function loadAdmin({ silent = false } = {}) {
 }
 
 async function loginOrRegister(path) {
+  const isRegister = path.includes("register");
+  if (isRegister && $("authPassword").value !== $("authPasswordConfirm").value) {
+    $("authPasswordConfirm").focus();
+    throw new Error("两次输入的密码不一致");
+  }
   const payload = {
     email: $("authEmail").value.trim(),
     password: $("authPassword").value,
+    passwordConfirm: $("authPasswordConfirm").value,
     name: $("authName").value.trim(),
   };
+  if (isRegister) {
+    payload.captchaId = authCaptchaId.value;
+    payload.captchaCode = authCaptchaCode.value.trim();
+  }
   const { user } = await api(path, { method: "POST", body: JSON.stringify(payload) });
   updateAccount(user);
   authDialog.close();
-  showToast(path.includes("register") ? "注册成功，已发放新用户积分" : "登录成功");
+  showToast(isRegister ? "注册成功，已发放新用户积分" : "登录成功");
   // 后台刷新，不阻塞 UI
   refreshJobs({ silent: true }).then((jobs) => {
     if (jobs) hydrateWorkspaceFromJobs(jobs, { preferLatest: true });
   });
   loadAdmin({ silent: true });
+}
+
+async function refreshCaptcha() {
+  try {
+    const captcha = await api(`/api/auth/captcha?t=${Date.now()}`);
+    authCaptchaId.value = captcha.id || "";
+    authCaptchaCode.value = "";
+    captchaImage.src = captcha.image || "";
+  } catch (error) {
+    showToast(error.message || "验证码加载失败", "error");
+  }
 }
 
 function hydrateWorkspaceFromJobs(jobs, { preferLatest = false } = {}) {
@@ -991,6 +1024,7 @@ $("registerButton").addEventListener("click", async () => {
     await loginOrRegister("/api/auth/register");
   } catch (error) {
     showToast(error.message, "error");
+    refreshCaptcha();
   } finally {
     setButtonLoading(button, false);
   }
@@ -999,10 +1033,12 @@ $("registerButton").addEventListener("click", async () => {
 function openAuthDialog(reason) {
   if (reason) showToast(reason, "error");
   if (!authDialog.open) authDialog.showModal();
+  if (!authCaptchaId.value) refreshCaptcha();
 }
 
 $("loginButton").addEventListener("click", () => openAuthDialog());
 $("closeAuth").addEventListener("click", () => authDialog.close());
+$("refreshCaptcha").addEventListener("click", refreshCaptcha);
 authDialog.addEventListener("click", (event) => {
   const rect = authDialog.getBoundingClientRect();
   const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
@@ -1083,6 +1119,14 @@ $("creditsTab").addEventListener("click", () => {
   window.creditsViewLoad(false);
 });
 
+$("creditStatusCard").addEventListener("click", () => $("creditsTab").click());
+$("creditStatusCard").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    $("creditsTab").click();
+  }
+});
+
 $("redeemForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = event.submitter;
@@ -1146,7 +1190,7 @@ refreshMe().then(async (user) => {
     return `<span style="color:${n > 0 ? 'var(--green,#38a169)' : 'var(--red,#e53e3e)'};font-weight:600">${s}</span>`;
   }
 
-  function renderEntries(entries, append) {
+  function renderDrawerEntries(entries, append) {
     const body = $("creditsDrawerBody");
     if (!append) { body.innerHTML = ""; allEntries = []; }
     if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted)">暂无记录</p>'; return; }
@@ -1173,14 +1217,14 @@ refreshMe().then(async (user) => {
     try {
       const { entries } = await api(`/api/credits/history?limit=${PAGE}&offset=${offset}`);
       offset += entries.length;
-      renderEntries(entries, append);
+      renderDrawerEntries(entries, append);
     } catch { $("creditsDrawerBody").innerHTML = '<p style="text-align:center;color:var(--red,#e53e3e)">加载失败</p>'; }
   }
 
   function open() { $("creditsDrawer").classList.remove("hidden"); loadHistory(false); }
   function close() { $("creditsDrawer").classList.add("hidden"); }
 
-  $("creditHistoryBtn").addEventListener("click", open);
+  $("creditStatusCard").addEventListener("dblclick", open);
   $("creditsDrawerClose").addEventListener("click", close);
   $("creditsDrawerBackdrop").addEventListener("click", close);
   $("creditsLoadMore").addEventListener("click", () => loadHistory(true));
@@ -1199,7 +1243,7 @@ refreshMe().then(async (user) => {
       </div>`).join("");
   }
 
-  function renderEntries(body, entries, append) {
+  function renderViewEntries(body, entries, append) {
     if (!append) body.innerHTML = "";
     if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);padding:20px">暂无记录</p>'; return; }
     entries.forEach((e) => {
@@ -1223,7 +1267,7 @@ refreshMe().then(async (user) => {
     if (!append) {
       viewOffset = 0;
       if (cachedEntries) {
-        renderEntries(body, cachedEntries, false);
+        renderViewEntries(body, cachedEntries, false);
         $("creditsViewLoadMore").classList.toggle("hidden", cachedEntries.length < VIEW_PAGE);
       } else {
         body.innerHTML = skeletonRows();
@@ -1233,7 +1277,7 @@ refreshMe().then(async (user) => {
       const { entries } = await api(`/api/credits/history?limit=${VIEW_PAGE}&offset=${viewOffset}`);
       viewOffset += entries.length;
       if (!append) cachedEntries = entries;
-      renderEntries(body, entries, append);
+      renderViewEntries(body, entries, append);
       $("creditsViewLoadMore").classList.toggle("hidden", entries.length < VIEW_PAGE);
     } catch { if (!append) body.innerHTML = '<p style="text-align:center;color:var(--red,#e53e3e);padding:20px">加载失败</p>'; }
   }

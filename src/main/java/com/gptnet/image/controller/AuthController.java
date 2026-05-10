@@ -4,6 +4,7 @@ import com.gptnet.image.dto.AuthDtos.LoginRequest;
 import com.gptnet.image.dto.AuthDtos.RegisterRequest;
 import com.gptnet.image.model.User;
 import com.gptnet.image.service.AuthService;
+import com.gptnet.image.service.CaptchaService;
 import com.gptnet.image.service.RateLimitService;
 import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,16 +21,25 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api")
 public class AuthController {
   private final AuthService auth;
+  private final CaptchaService captcha;
   private final RateLimitService rateLimit;
 
-  public AuthController(AuthService auth, RateLimitService rateLimit) {
+  public AuthController(AuthService auth, CaptchaService captcha, RateLimitService rateLimit) {
     this.auth = auth;
+    this.captcha = captcha;
     this.rateLimit = rateLimit;
+  }
+
+  @GetMapping("/auth/captcha")
+  public Map<String, Object> captcha(HttpServletRequest request) {
+    rateLimit.checkRegisterAttempt(request);
+    return captcha.create(request);
   }
 
   @PostMapping("/auth/register")
   public Map<String, Object> register(HttpServletRequest request, @Valid @RequestBody RegisterRequest body, HttpServletResponse response) {
     rateLimit.checkRegisterAttempt(request);
+    captcha.verify(body.getCaptchaId(), body.getCaptchaCode());
     User user = auth.register(body, response);
     return Maps.of("user", auth.publicUser(user));
   }
