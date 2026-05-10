@@ -1188,29 +1188,52 @@ refreshMe().then(async (user) => {
   // ── 积分明细标签页 ──
   let viewOffset = 0;
   const VIEW_PAGE = 50;
+  let cachedEntries = null;
+
+  function skeletonRows(n = 8) {
+    return Array.from({length: n}, () =>
+      `<div class="credits-entry skeleton">
+        <div class="credits-thumb-placeholder skel-box"></div>
+        <div class="credits-entry-mid"><div class="skel-line w60"></div><div class="skel-line w40"></div></div>
+        <div class="credits-entry-right"><div class="skel-line w30"></div></div>
+      </div>`).join("");
+  }
+
+  function renderEntries(body, entries, append) {
+    if (!append) body.innerHTML = "";
+    if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);padding:20px">暂无记录</p>'; return; }
+    entries.forEach((e) => {
+      const row = document.createElement("div");
+      row.className = "credits-entry";
+      const thumb = e.resultUrl ? `<img class="credits-thumb" src="${e.resultUrl}" loading="lazy" alt="">` : `<div class="credits-thumb-placeholder"></div>`;
+      row.innerHTML = `
+        <div class="credits-entry-left">${thumb}</div>
+        <div class="credits-entry-mid">
+          <div class="credits-entry-reason">${reasonLabel(e.reason)}</div>
+          ${e.prompt ? `<div class="credits-entry-prompt">${e.prompt.slice(0, 60)}${e.prompt.length > 60 ? '…' : ''}</div>` : ''}
+          <div class="credits-entry-time">${new Date(e.createdAt).toLocaleString('zh-CN')}</div>
+        </div>
+        <div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
+      body.appendChild(row);
+    });
+  }
 
   async function creditsViewLoad(append) {
     const body = $("creditsViewBody");
-    if (!append) { viewOffset = 0; body.innerHTML = '<div class="credits-loading">加载中…</div>'; }
+    if (!append) {
+      viewOffset = 0;
+      if (cachedEntries) {
+        renderEntries(body, cachedEntries, false);
+        $("creditsViewLoadMore").classList.toggle("hidden", cachedEntries.length < VIEW_PAGE);
+      } else {
+        body.innerHTML = skeletonRows();
+      }
+    }
     try {
       const { entries } = await api(`/api/credits/history?limit=${VIEW_PAGE}&offset=${viewOffset}`);
       viewOffset += entries.length;
-      if (!append) body.innerHTML = "";
-      if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted);padding:20px">暂无记录</p>'; return; }
-      entries.forEach((e) => {
-        const row = document.createElement("div");
-        row.className = "credits-entry";
-        const thumb = e.resultUrl ? `<img class="credits-thumb" src="${e.resultUrl}" loading="lazy" alt="">` : `<div class="credits-thumb-placeholder"></div>`;
-        row.innerHTML = `
-          <div class="credits-entry-left">${thumb}</div>
-          <div class="credits-entry-mid">
-            <div class="credits-entry-reason">${reasonLabel(e.reason)}</div>
-            ${e.prompt ? `<div class="credits-entry-prompt">${e.prompt.slice(0, 60)}${e.prompt.length > 60 ? '…' : ''}</div>` : ''}
-            <div class="credits-entry-time">${new Date(e.createdAt).toLocaleString('zh-CN')}</div>
-          </div>
-          <div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
-        body.appendChild(row);
-      });
+      if (!append) cachedEntries = entries;
+      renderEntries(body, entries, append);
       $("creditsViewLoadMore").classList.toggle("hidden", entries.length < VIEW_PAGE);
     } catch { if (!append) body.innerHTML = '<p style="text-align:center;color:var(--red,#e53e3e);padding:20px">加载失败</p>'; }
   }
