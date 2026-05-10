@@ -35,6 +35,7 @@
           <div class="status-card">
             <span>积分</span>
             <strong class="credit-balance"><span class="credit-star" aria-hidden="true"></span><span id="creditBalance">0</span></strong>
+            <button class="credit-history-btn" id="creditHistoryBtn" type="button" title="积分明细">明细</button>
           </div>
           <a class="top-action buy-credits-btn hidden" id="buyCreditsBtn" target="_blank" rel="noreferrer">购买积分</a>
           <button class="top-action" id="loginButton">登录</button>
@@ -232,5 +233,20 @@
     </div>
 
     <script src="./script.js"></script>
+  <div class="credits-drawer hidden" id="creditsDrawer" role="dialog" aria-modal="true" aria-label="积分明细">
+    <div class="credits-drawer-backdrop" id="creditsDrawerBackdrop"></div>
+    <div class="credits-drawer-panel">
+      <div class="credits-drawer-head">
+        <span>积分明细</span>
+        <button type="button" class="icon-only" id="creditsDrawerClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="credits-drawer-body" id="creditsDrawerBody">
+        <div class="credits-loading">加载中…</div>
+      </div>
+      <div class="credits-drawer-foot">
+        <button type="button" id="creditsLoadMore" class="ghost-action hidden">加载更多</button>
+      </div>
+    </div>
+  </div>
   </body>
 </html>

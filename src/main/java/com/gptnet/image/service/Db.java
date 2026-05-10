@@ -59,7 +59,6 @@ public class Db {
       SELECT * FROM "Gateway"
       WHERE "enabled" = true
         AND "model" = :model
-        AND ("disabledUntil" IS NULL OR "disabledUntil" < now())
       ORDER BY "priority" DESC
       """, Map.of("model", model), gatewayMapper());
   }
@@ -121,6 +120,19 @@ public class Db {
     Integer value = jdbc.queryForObject("SELECT COALESCE(SUM(\"amount\"), 0) FROM \"WalletEntry\" WHERE \"userId\" = :userId",
       Map.of("userId", userId), Integer.class);
     return value == null ? 0 : value;
+  }
+
+  public List<Map<String, Object>> walletHistory(String userId, int limit, int offset) {
+    return jdbc.queryForList("""
+      SELECT w.id, w.amount, w.reason, w.\"refId\", w.\"createdAt\",
+             t.model, t.prompt, t.size, t.quality, t.status AS \"taskStatus\",
+             (SELECT r.url FROM \"ImageResult\" r WHERE r.\"taskId\" = w.\"refId\" LIMIT 1) AS \"resultUrl\"
+      FROM \"WalletEntry\" w
+      LEFT JOIN \"ImageTask\" t ON t.id = w.\"refId\"
+      WHERE w.\"userId\" = :userId
+      ORDER BY w.\"createdAt\" DESC
+      LIMIT :limit OFFSET :offset
+      """, Map.of("userId", userId, "limit", limit, "offset", offset));
   }
 
   public boolean exists(String table) {
@@ -221,6 +233,8 @@ public class Db {
       rs.getString("status"),
       rs.getString("errorCode"),
       rs.getString("errorMessage"),
+      rs.getString("requestUrl"),
+      rs.getString("rawResponse"),
       rs.getInt("retryCount"),
       rs.getInt("maxRetries"),
       rs.getInt("costCredits"),

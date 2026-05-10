@@ -1903,12 +1903,28 @@ bindFilter("jobStatusFilter", renderJobs);
 $("exportErrorLogs").addEventListener("click", () => {
   const failed = state.jobs.filter((j) => j.status === "failed");
   if (!failed.length) { showToast("没有失败任务", "info"); return; }
-  const cols = ["id", "createdAt", "userEmail", "model", "gatewayId", "errorCode", "errorMessage", "prompt"];
-  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const csv = [cols.join(","), ...failed.map((j) => cols.map((c) => escape(j[c])).join(","))].join("\n");
+  const records = failed.map((j) => ({
+    id: j.id,
+    createdAt: j.createdAt,
+    userEmail: j.userEmail,
+    userId: j.userId,
+    model: j.model,
+    gatewayId: j.gatewayId,
+    errorCode: j.errorCode,
+    errorMessage: j.errorMessage,
+    retryCount: j.retryCount,
+    latencyMs: j.latencyMs,
+    prompt: j.prompt,
+    size: j.size,
+    quality: j.quality,
+    network: {
+      requestUrl: j.requestUrl ?? null,
+      rawResponse: j.rawResponse ?? null,
+    },
+  }));
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-  a.download = `error-logs-${new Date().toISOString().slice(0,10)}.csv`;
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(records, null, 2)], { type: "application/json" }));
+  a.download = `error-logs-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
 });
 bindFilter("codeSearch", renderCodes);

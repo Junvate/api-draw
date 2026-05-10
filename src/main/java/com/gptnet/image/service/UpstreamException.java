@@ -4,6 +4,8 @@ public class UpstreamException extends RuntimeException {
   private final String code;
   private final int status;
   private final boolean retryable;
+  private String requestUrl;
+  private String rawResponse;
 
   public UpstreamException(String code, String message, int status, boolean retryable) {
     super(message);
@@ -12,16 +14,16 @@ public class UpstreamException extends RuntimeException {
     this.retryable = retryable;
   }
 
-  public String code() {
-    return code;
-  }
+  public String code() { return code; }
+  public int status() { return status; }
+  public boolean retryable() { return retryable; }
+  public String requestUrl() { return requestUrl; }
+  public String rawResponse() { return rawResponse; }
 
-  public int status() {
-    return status;
-  }
-
-  public boolean retryable() {
-    return retryable;
+  public UpstreamException withDebug(String requestUrl, String rawResponse) {
+    this.requestUrl = requestUrl;
+    this.rawResponse = rawResponse;
+    return this;
   }
 
   public static UpstreamException fromHttp(int status, String message) {

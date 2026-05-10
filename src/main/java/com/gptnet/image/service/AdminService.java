@@ -319,6 +319,8 @@ public class AdminService {
         "status", adminStatus(task.status()),
         "errorCode", task.errorCode(),
         "errorMessage", task.errorMessage(),
+        "requestUrl", task.requestUrl(),
+        "rawResponse", task.rawResponse(),
         "retryCount", task.retryCount(),
         "maxRetries", task.maxRetries(),
         "costCredits", task.costCredits(),

@@ -1074,3 +1074,60 @@ refreshMe().then(async (user) => {
   const jobs = await refreshJobs({ silent: true });
   hydrateWorkspaceFromJobs(jobs, { preferLatest: true });
 });
+
+// ── 积分明细抽屉 ──────────────────────────────────────────────
+(function () {
+  const REASON_LABEL = {
+    seed: "初始赠送", signup_bonus: "注册赠送", admin_adjust: "管理员调整",
+    generation_hold: "生成扣费", generation_refund: "生成退款",
+    generation_settle: "生成结算", redeem_code: "兑换码", subscription_purchase: "订阅购买",
+  };
+  let offset = 0;
+  const PAGE = 50;
+  let allEntries = [];
+
+  function reasonLabel(r) { return REASON_LABEL[r] || r; }
+  function amountHtml(n) {
+    const s = n > 0 ? `+${n}` : String(n);
+    return `<span style="color:${n > 0 ? "var(--green,#38a169)" : "var(--red,#e53e3e)");font-weight:600">${s}</span>`;
+  }
+
+  function renderEntries(entries, append) {
+    const body = $("creditsDrawerBody");
+    if (!append) { body.innerHTML = ""; allEntries = []; }
+    if (!entries.length && !append) { body.innerHTML = '<p style="text-align:center;color:var(--muted)">暂无记录</p>'; return; }
+    allEntries = allEntries.concat(entries);
+    entries.forEach((e) => {
+      const row = document.createElement("div");
+      row.className = "credits-entry";
+      const thumb = e.resultUrl ? `<img class="credits-thumb" src="${e.resultUrl}" loading="lazy" alt="">` : `<div class="credits-thumb-placeholder"></div>`;
+      row.innerHTML = `
+        <div class="credits-entry-left">${thumb}</div>
+        <div class="credits-entry-mid">
+          <div class="credits-entry-reason">${reasonLabel(e.reason)}</div>
+          ${e.prompt ? `<div class="credits-entry-prompt">${e.prompt.slice(0, 60)}${e.prompt.length > 60 ? "…" : ""}</div>` : ""}
+          <div class="credits-entry-time">${new Date(e.createdAt).toLocaleString("zh-CN")}</div>
+        </div>
+        <div class="credits-entry-right">${amountHtml(e.amount)}</div>`;
+      body.appendChild(row);
+    });
+    $("creditsLoadMore").classList.toggle("hidden", entries.length < PAGE);
+  }
+
+  async function loadHistory(append) {
+    if (!append) { offset = 0; $("creditsDrawerBody").innerHTML = '<div class="credits-loading">加载中…</div>'; }
+    try {
+      const { entries } = await api(`/api/credits/history?limit=${PAGE}&offset=${offset}`);
+      offset += entries.length;
+      renderEntries(entries, append);
+    } catch { $("creditsDrawerBody").innerHTML = '<p style="text-align:center;color:var(--red,#e53e3e)">加载失败</p>'; }
+  }
+
+  function open() { $("creditsDrawer").classList.remove("hidden"); loadHistory(false); }
+  function close() { $("creditsDrawer").classList.add("hidden"); }
+
+  $("creditHistoryBtn").addEventListener("click", open);
+  $("creditsDrawerClose").addEventListener("click", close);
+  $("creditsDrawerBackdrop").addEventListener("click", close);
+  $("creditsLoadMore").addEventListener("click", () => loadHistory(true));
+})();

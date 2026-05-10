@@ -66,6 +66,20 @@ public class ImageController {
     return generateInternal(request, body, files == null ? List.of() : files);
   }
 
+  @GetMapping("/credits/history")
+  public Map<String, Object> creditsHistory(
+    HttpServletRequest request,
+    @RequestParam(defaultValue = "50") int limit,
+    @RequestParam(defaultValue = "0") int offset
+  ) {
+    User user = auth.validateSession(request);
+    int safeLimit = Math.min(limit, 100);
+    return Maps.of(
+      "entries", db.walletHistory(user.id(), safeLimit, offset),
+      "credits", db.walletBalance(user.id())
+    );
+  }
+
   @GetMapping("/jobs")
   public Map<String, Object> jobs(HttpServletRequest request) {
     User user = auth.validateSession(request);

@@ -248,9 +248,16 @@ public class ImageService {
       String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
       String code = upstreamException == null ? "UPSTREAM_FAILED" : upstreamException.code();
       boolean retryable = upstreamException == null || upstreamException.retryable();
+      String reqUrl = upstreamException != null ? upstreamException.requestUrl() : null;
+      String rawResp = upstreamException != null ? upstreamException.rawResponse() : null;
       log.error("[task={}] Gateway error gateway={} code={} attempt={}/{} retryable={} message={}",
         task.id(), gateway.name(), code, attempt, maxAttempts, retryable, message, exception);
       recordGatewayFailure(gateway, message, System.currentTimeMillis() - started, code);
+      if (reqUrl != null || rawResp != null) {
+        db.jdbc().update("""
+          UPDATE "ImageTask" SET "requestUrl" = :requestUrl, "rawResponse" = :rawResponse WHERE "id" = :id
+          """, Map.of("id", task.id(), "requestUrl", reqUrl == null ? "" : reqUrl, "rawResponse", truncate(rawResp, 4000)));
+      }
       if (retryable && attempt < maxAttempts) {
         db.jdbc().update("""
           UPDATE "ImageTask" SET
@@ -405,12 +412,13 @@ public class ImageService {
       "n", task.imageCount()
     );
     if (upstreamGroup != null) body.put("group", upstreamGroup);
-    UpstreamClient.UpstreamResponse response = upstream.json(upstreamUrl(gateway.baseUrl(), generationPath), "POST",
+    String url = upstreamUrl(gateway.baseUrl(), generationPath);
+    UpstreamClient.UpstreamResponse response = upstream.json(url, "POST",
       Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
-    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status()));
+    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(url, response.text());
     Map<String, Object> first = firstData(response.payload());
     if (first == null || (first.get("b64_json") == null && first.get("url") == null)) {
-      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", response.status(), true);
+      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", response.status(), true).withDebug(url, response.text());
     }
     if (first.get("url") != null) return new GatewayResult(String.valueOf(first.get("url")), task.outputFormat(), null, null, null, null, null);
     StoredImage stored = persistGeneratedImage(task, String.valueOf(first.get("b64_json")), task.outputFormat());
@@ -429,12 +437,13 @@ public class ImageService {
     for (LoadedReferenceImage image : referenceImages) {
       parts.add(Part.file("image", image.bytes(), image.filename(), image.contentType()));
     }
-    UpstreamClient.UpstreamResponse response = upstream.multipart(upstreamUrl(gateway.baseUrl(), editPath),
+    String editUrl = upstreamUrl(gateway.baseUrl(), editPath);
+    UpstreamClient.UpstreamResponse response = upstream.multipart(editUrl,
       Map.of("Authorization", "Bearer " + apiKey), parts, gateway.timeoutMs());
-    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status()));
+    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(editUrl, response.text());
     Map<String, Object> first = firstData(response.payload());
     if (first == null || (first.get("b64_json") == null && first.get("url") == null)) {
-      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像编辑网关没有返回结果", response.status(), true);
+      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像编辑网关没有返回结果", response.status(), true).withDebug(editUrl, response.text());
     }
     if (first.get("url") != null) return new GatewayResult(String.valueOf(first.get("url")), task.outputFormat(), null, null, null, null, null);
     StoredImage stored = persistGeneratedImage(task, String.valueOf(first.get("b64_json")), task.outputFormat());

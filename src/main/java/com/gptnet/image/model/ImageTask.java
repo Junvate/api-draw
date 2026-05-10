@@ -20,6 +20,8 @@ public record ImageTask(
   String status,
   String errorCode,
   String errorMessage,
+  String requestUrl,
+  String rawResponse,
   int retryCount,
   int maxRetries,
   int costCredits,
@@ -34,19 +36,19 @@ public record ImageTask(
 ) {
   public ImageTask withResults(List<ImageResult> nextResults) {
     return new ImageTask(id, userId, apiKeyId, gatewayId, requestId, model, prompt, negativePrompt, size, quality,
-      outputFormat, background, imageCount, status, errorCode, errorMessage, retryCount, maxRetries, costCredits,
+      outputFormat, background, imageCount, status, errorCode, errorMessage, requestUrl, rawResponse, retryCount, maxRetries, costCredits,
       latencyMs, startedAt, finishedAt, createdAt, updatedAt, nextResults, user, gateway);
   }
 
   public ImageTask withUser(User nextUser) {
     return new ImageTask(id, userId, apiKeyId, gatewayId, requestId, model, prompt, negativePrompt, size, quality,
-      outputFormat, background, imageCount, status, errorCode, errorMessage, retryCount, maxRetries, costCredits,
+      outputFormat, background, imageCount, status, errorCode, errorMessage, requestUrl, rawResponse, retryCount, maxRetries, costCredits,
       latencyMs, startedAt, finishedAt, createdAt, updatedAt, results, nextUser, gateway);
   }
 
   public ImageTask withGateway(Gateway nextGateway) {
     return new ImageTask(id, userId, apiKeyId, gatewayId, requestId, model, prompt, negativePrompt, size, quality,
-      outputFormat, background, imageCount, status, errorCode, errorMessage, retryCount, maxRetries, costCredits,
+      outputFormat, background, imageCount, status, errorCode, errorMessage, requestUrl, rawResponse, retryCount, maxRetries, costCredits,
       latencyMs, startedAt, finishedAt, createdAt, updatedAt, results, user, nextGateway);
   }
 }
