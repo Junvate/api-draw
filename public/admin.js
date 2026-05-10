@@ -952,16 +952,16 @@ function renderJobs() {
   const status = $("jobStatusFilter").value;
   const rows = state.jobs
     .filter((job) => !status || job.status === status)
-    .filter((job) => includesText(search, job.id, job.userEmail, job.userName, job.model, job.prompt, job.status, job.gatewayId));
+    .filter((job) => includesText(search, job.id, job.userEmail, job.userName, job.model, job.prompt, job.status, job.gatewayId, job.errorCode, job.errorMessage));
 
   $("jobRows").innerHTML = rows.map((job) => `
     <tr data-id="${job.id}">
       <td><div class="cell-stack"><strong>${escapeHtml(job.model || "image-task")}</strong><small>${escapeHtml(job.gatewayId || "")}</small></div></td>
       <td>${escapeHtml(job.userEmail || job.userId)}</td>
       <td>${escapeHtml(job.model)}</td>
-      <td>${statusBadge(job.status)}</td>
+      <td>${statusBadge(job.status)}${job.status === "failed" && job.errorCode ? `<br><small style="color:var(--red,#e53e3e);font-size:11px">${escapeHtml(job.errorCode)}</small>` : ""}</td>
       <td>${Number(job.costCredits || 0)}</td>
-      <td title="${escapeHtml(job.prompt || "")}">${escapeHtml(clip(job.prompt, 92))}</td>
+      <td title="${escapeHtml(job.prompt || "")}">${escapeHtml(clip(job.prompt, 92))}${job.status === "failed" && job.errorMessage ? `<br><small style="color:var(--red,#e53e3e);font-size:11px" title="${escapeHtml(job.errorMessage)}">${escapeHtml(clip(job.errorMessage, 80))}</small>` : ""}</td>
       <td>${formatDate(job.createdAt)}</td>
       <td><div class="row-actions task-row-actions"><button class="icon-only" data-action="job-menu" aria-label="更多操作">···</button></div></td>
     </tr>
@@ -1167,7 +1167,8 @@ function showJobDetail(id) {
       ${fieldRow("积分", Number(job.costCredits || 0))}
       ${fieldRow("创建时间", formatDate(job.createdAt))}
       ${fieldRow("完成时间", formatDate(job.completedAt))}
-      ${fieldRow("错误", job.errorMessage || "-")}
+      ${fieldRow("错误码", job.errorCode || "-")}
+      ${fieldRow("错误原因", job.errorMessage || "-")}
     </div>
     <div class="detail-section">
       <h3>提示词</h3>
