@@ -15,6 +15,7 @@ const state = {
   type: "图像",
   ratio: "自动",
   quality: "高清(2k)",
+  count: 1,
   refs: 0,
   jobs: [],
   previewUrls: [],
@@ -54,7 +55,8 @@ const prompts = [
 const $ = (id) => document.getElementById(id);
 const modelOptions = document.querySelectorAll(".model-option");
 const ratioOptions = document.querySelectorAll(".tile");
-const qualityOptions = document.querySelectorAll(".quality");
+const qualityOptions = document.querySelectorAll("#qualityOptions .quality");
+const countOptions = document.querySelectorAll("#countOptions .quality");
 const switcherButtons = document.querySelectorAll(".switcher button");
 const promptForm = $("promptForm");
 const promptInput = $("promptInput");
@@ -110,7 +112,8 @@ function money(cents) {
 }
 
 function estimateCost() {
-  return 8;
+  const unit = state.quality === "超清(4k)" ? 8 : 6;
+  return unit * (state.count || 1);
 }
 
 function isPendingStatus(status) {
@@ -230,6 +233,7 @@ function createGeneratePayload(prompt) {
     model: state.model,
     ratio: state.ratio,
     quality: state.quality,
+    count: state.count,
     refs: state.refs,
     response_mode: "async",
   };
@@ -441,6 +445,7 @@ function renderResultCard(job, { silent = false } = {}) {
   const displayResultUrl = cacheBustResultUrl(resultUrl, job);
   const originalUrl = resolveOriginalResultUrl(job);
   const canEdit = Boolean(resultUrl && job?.status === "succeeded");
+  const allImages = job?.images?.length > 1 ? job.images.map((i) => i.url).filter(Boolean) : null;
   state.activeResultJob = canEdit ? job : null;
   emptyState.classList.add("hidden");
   resultCard.classList.remove("hidden");
@@ -459,21 +464,35 @@ function renderResultCard(job, { silent = false } = {}) {
     stageImage.referrerPolicy = "no-referrer";
     canvasStage.appendChild(stageImage);
 
-    const image = document.createElement("img");
-    image.src = displayResultUrl;
-    image.alt = "生成结果";
-    image.referrerPolicy = "no-referrer";
-    image.addEventListener("error", () => {
-      resultArt.replaceChildren(createResultPlaceholder({
-        ...job,
-        status: "failed",
-        error: "图片结果已生成，但浏览器加载图片失败。请点击打开原图查看。",
-      }));
-    }, { once: true });
-    resultArt.appendChild(image);
-    image.addEventListener("load", () => {
-      canvasStage.classList.add("has-loaded-result");
-    }, { once: true });
+    if (allImages) {
+      const grid = document.createElement("div");
+      grid.className = "multi-result-grid";
+      allImages.forEach((url, i) => {
+        const img = document.createElement("img");
+        img.src = cacheBustResultUrl(url, job);
+        img.alt = `生成结果 ${i + 1}`;
+        img.referrerPolicy = "no-referrer";
+        img.addEventListener("click", () => window.open(url, "_blank"));
+        grid.appendChild(img);
+      });
+      resultArt.appendChild(grid);
+    } else {
+      const image = document.createElement("img");
+      image.src = displayResultUrl;
+      image.alt = "生成结果";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("error", () => {
+        resultArt.replaceChildren(createResultPlaceholder({
+          ...job,
+          status: "failed",
+          error: "图片结果已生成，但浏览器加载图片失败。请点击打开原图查看。",
+        }));
+      }, { once: true });
+      resultArt.appendChild(image);
+      image.addEventListener("load", () => {
+        canvasStage.classList.add("has-loaded-result");
+      }, { once: true });
+    }
   } else {
     canvasStage.style.removeProperty("--stage-result-url");
     canvasStage.classList.remove("has-loaded-result");
@@ -812,6 +831,15 @@ qualityOptions.forEach((button) => {
     setActive(qualityOptions, button);
     state.quality = button.dataset.value;
     enforceQualityRatioCompat();
+    updateTask();
+    persistWorkspaceState();
+  });
+});
+
+countOptions.forEach((button) => {
+  button.addEventListener("click", () => {
+    setActive(countOptions, button);
+    state.count = parseInt(button.dataset.value, 10);
     updateTask();
     persistWorkspaceState();
   });

@@ -106,7 +106,9 @@ public class ImageService {
     String requestedQuality = cleanFormString(params.dto().getQuality());
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);
     Gateway gateway = selectGateway(requestedModel, normalizedSize);
-    int cost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
+    int unitCost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
+    int imageCount = Math.max(1, Math.min(4, params.dto().getCount() == null ? 1 : params.dto().getCount()));
+    int cost = unitCost * imageCount;
     auth.lockUserWallet(params.userId());
     if (db.walletBalance(params.userId()) < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足");
     List<MultipartFile> referenceFiles = validateReferenceFiles(params.referenceFiles());
@@ -119,7 +121,7 @@ public class ImageService {
         )
         VALUES (
           :id, :userId, :apiKeyId, :gatewayId, :requestId, :model, :prompt, :size,
-          :quality, :outputFormat, :background, 1, :costCredits, 'queued'::"ImageTaskStatus"
+          :quality, :outputFormat, :background, :imageCount, :costCredits, 'queued'::"ImageTaskStatus"
         )
         """, new MapSqlParameterSource()
         .addValue("id", taskId)
@@ -133,6 +135,7 @@ public class ImageService {
         .addValue("quality", normalizeQuality(requestedQuality))
         .addValue("outputFormat", Optional.of(cleanFormString(params.dto().getOutput_format())).filter(s -> !s.isBlank()).orElse("png"))
         .addValue("background", Optional.of(cleanFormString(params.dto().getBackground())).filter(s -> !s.isBlank()).orElse("opaque"))
+        .addValue("imageCount", imageCount)
         .addValue("costCredits", cost));
     } catch (DataIntegrityViolationException exception) {
       if (params.apiKeyId() != null && params.requestId() != null) {
@@ -187,8 +190,7 @@ public class ImageService {
       db.jdbc().update("""
         INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "width", "height", "storageKey", "sizeBytes", "hash")
         VALUES (:id, :taskId, :url, :format, :width, :height, :storageKey, :sizeBytes, :hash)
-        ON CONFLICT ("taskId") DO UPDATE SET
-          "url" = EXCLUDED."url",
+        ON CONFLICT ("taskId", "url") DO UPDATE SET
           "format" = EXCLUDED."format",
           "width" = EXCLUDED."width",
           "height" = EXCLUDED."height",
@@ -206,6 +208,13 @@ public class ImageService {
         .addValue("storageKey", result.storageKey())
         .addValue("sizeBytes", result.sizeBytes())
         .addValue("hash", result.hash()));
+      for (String extraUrl : result.extraUrls()) {
+        db.jdbc().update("""
+          INSERT INTO "ImageResult" ("id", "taskId", "url", "format")
+          VALUES (:id, :taskId, :url, :format)
+          ON CONFLICT ("taskId", "url") DO NOTHING
+          """, Map.of("id", db.id(), "taskId", task.id(), "url", extraUrl, "format", result.format()));
+      }
       db.jdbc().update("""
         INSERT INTO "UsageRecord" (
           "id", "userId", "apiKeyId", "taskId", "model", "imageCount", "costCredits", "latencyMs", "status"
@@ -416,13 +425,17 @@ public class ImageService {
     UpstreamClient.UpstreamResponse response = upstream.json(url, "POST",
       Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(url, response.text());
-    Map<String, Object> first = firstData(response.payload());
-    if (first == null || (first.get("b64_json") == null && first.get("url") == null)) {
+    List<Map<String, Object>> dataList = allData(response.payload());
+    if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
       throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", response.status(), true).withDebug(url, response.text());
     }
-    if (first.get("url") != null) return new GatewayResult(String.valueOf(first.get("url")), task.outputFormat(), null, null, null, null, null);
-    StoredImage stored = persistGeneratedImage(task, String.valueOf(first.get("b64_json")), task.outputFormat());
-    return new GatewayResult(stored.url(), task.outputFormat(), null, null, stored.storageKey(), stored.sizeBytes(), stored.hash());
+    if (dataList.get(0).get("url") != null) return new GatewayResult(String.valueOf(dataList.get(0).get("url")), task.outputFormat(), null, null, null, null, null, dataList.stream().skip(1).map(d -> String.valueOf(d.get("url"))).filter(u -> !"null".equals(u)).toList());
+    List<StoredImage> stored = new ArrayList<>();
+    for (Map<String, Object> item : dataList) {
+      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat()));
+    }
+    StoredImage first = stored.get(0);
+    return new GatewayResult(first.url(), task.outputFormat(), null, null, first.storageKey(), first.sizeBytes(), first.hash(), stored.stream().skip(1).map(StoredImage::url).toList());
   }
 
   private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages) {
@@ -441,13 +454,17 @@ public class ImageService {
     UpstreamClient.UpstreamResponse response = upstream.multipart(editUrl,
       Map.of("Authorization", "Bearer " + apiKey), parts, gateway.timeoutMs());
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(editUrl, response.text());
-    Map<String, Object> first = firstData(response.payload());
-    if (first == null || (first.get("b64_json") == null && first.get("url") == null)) {
+    List<Map<String, Object>> dataList = allData(response.payload());
+    if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
       throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像编辑网关没有返回结果", response.status(), true).withDebug(editUrl, response.text());
     }
-    if (first.get("url") != null) return new GatewayResult(String.valueOf(first.get("url")), task.outputFormat(), null, null, null, null, null);
-    StoredImage stored = persistGeneratedImage(task, String.valueOf(first.get("b64_json")), task.outputFormat());
-    return new GatewayResult(stored.url(), task.outputFormat(), null, null, stored.storageKey(), stored.sizeBytes(), stored.hash());
+    if (dataList.get(0).get("url") != null) return new GatewayResult(String.valueOf(dataList.get(0).get("url")), task.outputFormat(), null, null, null, null, null, List.of());
+    List<StoredImage> stored = new ArrayList<>();
+    for (Map<String, Object> item : dataList) {
+      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat()));
+    }
+    StoredImage first = stored.get(0);
+    return new GatewayResult(first.url(), task.outputFormat(), null, null, first.storageKey(), first.sizeBytes(), first.hash(), stored.stream().skip(1).map(StoredImage::url).toList());
   }
 
   @SuppressWarnings("unchecked")
@@ -457,6 +474,15 @@ public class ImageService {
       return (Map<String, Object>) map;
     }
     return null;
+  }
+
+  @SuppressWarnings("unchecked")
+  private List<Map<String, Object>> allData(Map<String, Object> payload) {
+    Object data = payload.get("data");
+    if (data instanceof List<?> list) {
+      return list.stream().filter(i -> i instanceof Map).map(i -> (Map<String, Object>) i).toList();
+    }
+    return List.of();
   }
 
   private StoredImage persistGeneratedImage(ImageTask task, String b64, String format) {
@@ -648,7 +674,7 @@ public class ImageService {
   }
 
   public record CreateTaskParams(String userId, String apiKeyId, String requestId, CreateImageRequest dto, List<MultipartFile> referenceFiles) {}
-  private record GatewayResult(String url, String format, Integer width, Integer height, String storageKey, Integer sizeBytes, String hash) {}
+  private record GatewayResult(String url, String format, Integer width, Integer height, String storageKey, Integer sizeBytes, String hash, List<String> extraUrls) {}
   private record StoredImage(String storageKey, String url, Integer sizeBytes, String hash) {}
   private record LoadedReferenceImage(String filename, String contentType, byte[] bytes) {}
 }

@@ -33,7 +33,7 @@ public class QueueService {
     StringRedisTemplate redis,
     Db db,
     @Value("${REDIS_KEY_PREFIX:draw:}") String keyPrefix,
-    @Value("${IMAGE_WORKER_CONCURRENCY:2}") int concurrency,
+    @Value("${IMAGE_WORKER_CONCURRENCY:10}") int concurrency,
     @Value("${IMAGE_JOB_ATTEMPTS:3}") int attempts,
     @Value("${IMAGE_JOB_BACKOFF_MS:5000}") long backoffMs,
     @Value("${IMAGE_WORKER_ENABLED:true}") boolean workerEnabled,

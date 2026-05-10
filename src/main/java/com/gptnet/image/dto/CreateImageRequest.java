@@ -22,6 +22,9 @@ public class CreateImageRequest {
   @Min(0)
   @Max(3)
   private Integer refs;
+  @Min(1)
+  @Max(4)
+  private Integer count;
   private String response_mode;
 
   public String getPrompt() { return prompt; }
@@ -40,6 +43,8 @@ public class CreateImageRequest {
   public void setBackground(String background) { this.background = background; }
   public Integer getRefs() { return refs; }
   public void setRefs(Integer refs) { this.refs = refs; }
+  public Integer getCount() { return count; }
+  public void setCount(Integer count) { this.count = count; }
   public String getResponse_mode() { return response_mode; }
   public void setResponse_mode(String response_mode) { this.response_mode = response_mode; }
 }
