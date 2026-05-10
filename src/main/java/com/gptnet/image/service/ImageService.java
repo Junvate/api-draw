@@ -103,7 +103,7 @@ public class ImageService {
     String requestedQuality = cleanFormString(params.dto().getQuality());
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);
     Gateway gateway = selectGateway(requestedModel, normalizedSize);
-    int cost = "3840x2160".equals(normalizedSize) ? 8 : "2048x2048".equals(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
+    int cost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
     auth.lockUserWallet(params.userId());
     if (db.walletBalance(params.userId()) < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足");
     List<MultipartFile> referenceFiles = validateReferenceFiles(params.referenceFiles());
@@ -557,11 +557,11 @@ public class ImageService {
 
   private String normalizeSize(String rawValue, String quality) {
     String value = cleanFormString(rawValue);
-    if ("超清(4k)".equals(quality) || "high".equals(quality)) return "3840x2160";
-    if ("自动(2k)".equals(quality) || "自动(1k)".equals(quality) || "高清(2k)".equals(quality) || "medium".equals(quality)) return "2048x2048";
-    if (value.isBlank() || "自动".equals(value) || "Auto".equals(value) || "auto".equals(value)) return "2048x2048";
-    if ("1:1".equals(value)) return "2048x2048";
-    if ("16:9".equals(value) || "9:16".equals(value)) return "2048x2048";
+    boolean is4k = "超清(4k)".equals(quality) || "high".equals(quality);
+    boolean isSquare = value.isBlank() || "自动".equals(value) || "Auto".equals(value) || "auto".equals(value) || "1:1".equals(value);
+    if (isSquare) return is4k ? "3840x3840" : "2048x2048";
+    if ("16:9".equals(value)) return is4k ? "3840x2160" : "2048x1152";
+    if ("9:16".equals(value)) return is4k ? "2160x3840" : "1152x2048";
     return value;
   }
 
@@ -572,9 +572,17 @@ public class ImageService {
     return value;
   }
 
+  private boolean is4kSize(String size) {
+    return size != null && (size.startsWith("3840x") || size.startsWith("2160x"));
+  }
+
+  private boolean is2kSize(String size) {
+    return size != null && (size.startsWith("2048x") || size.startsWith("1152x"));
+  }
+
   private String groupForSize(String size) {
-    if ("3840x2160".equals(size)) return "GPT-Image-2-4k";
-    if ("2048x2048".equals(size)) return "GPT-Image-2-2k";
+    if (is4kSize(size)) return "GPT-Image-2-4k";
+    if (is2kSize(size)) return "GPT-Image-2-2k";
     return null;
   }
 
