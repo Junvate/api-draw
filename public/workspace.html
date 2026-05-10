@@ -11,9 +11,6 @@
     <div class="app-shell">
       <header class="topbar">
         <div class="brand-row">
-          <div class="brand-mark" aria-hidden="true">
-            <span></span>
-          </div>
           <div>
             <h1>GPTNet Image</h1>
             <p>chatgptnet.com</p>
@@ -228,8 +225,16 @@
 
       <dialog class="auth-dialog" id="authDialog">
         <form class="auth-box" id="authForm">
-          <h2>登录平台</h2>
-          <p>请输入真实账号登录。若未创建管理员，可通过环境变量注入首个后台账号。</p>
+          <div class="auth-heading">
+            <div>
+              <h2 id="authTitle">登录平台</h2>
+              <p id="authDescription">请输入真实账号登录。若未创建管理员，可通过环境变量注入首个后台账号。</p>
+            </div>
+            <div class="auth-mode-switch" role="tablist" aria-label="账号操作">
+              <button class="active" id="authLoginMode" type="button" role="tab" aria-selected="true">登录</button>
+              <button id="authRegisterMode" type="button" role="tab" aria-selected="false">注册</button>
+            </div>
+          </div>
           <label>
             邮箱
             <input id="authEmail" type="email" autocomplete="username" required />
@@ -238,15 +243,15 @@
             密码
             <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required />
           </label>
-          <label>
+          <label class="register-only hidden">
             重复密码
             <input id="authPasswordConfirm" type="password" autocomplete="new-password" minlength="8" />
           </label>
-          <label>
+          <label class="register-only hidden">
             昵称
             <input id="authName" placeholder="注册时可填写" />
           </label>
-          <label>
+          <label class="register-only hidden">
             验证码
             <div class="captcha-row">
               <input id="authCaptchaCode" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="one-time-code" placeholder="4 位数字" />
@@ -258,8 +263,7 @@
           </label>
           <div class="auth-actions">
             <button type="button" id="closeAuth">取消</button>
-            <button type="button" id="registerButton">注册</button>
-            <button type="submit">登录</button>
+            <button type="submit" id="authSubmitButton">登录</button>
           </div>
         </form>
       </dialog>

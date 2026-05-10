@@ -82,6 +82,7 @@ const authDialog = $("authDialog");
 const captchaImage = $("captchaImage");
 const authCaptchaId = $("authCaptchaId");
 const authCaptchaCode = $("authCaptchaCode");
+let authMode = "login";
 const promptCounter = $("promptCounter");
 const composerToggle = $("composerToggle");
 const composerRail = $("composerRail");
@@ -744,6 +745,25 @@ async function loginOrRegister(path) {
   loadAdmin({ silent: true });
 }
 
+function setAuthMode(mode) {
+  authMode = mode === "register" ? "register" : "login";
+  const isRegister = authMode === "register";
+  $("authTitle").textContent = isRegister ? "注册账号" : "登录平台";
+  $("authDescription").textContent = isRegister
+    ? "注册需要填写重复密码和 4 位验证码。"
+    : "请输入真实账号登录。若未创建管理员，可通过环境变量注入首个后台账号。";
+  $("authSubmitButton").textContent = isRegister ? "注册" : "登录";
+  $("authLoginMode").classList.toggle("active", !isRegister);
+  $("authRegisterMode").classList.toggle("active", isRegister);
+  $("authLoginMode").setAttribute("aria-selected", String(!isRegister));
+  $("authRegisterMode").setAttribute("aria-selected", String(isRegister));
+  document.querySelectorAll(".register-only").forEach((item) => item.classList.toggle("hidden", !isRegister));
+  $("authPassword").autocomplete = isRegister ? "new-password" : "current-password";
+  $("authPasswordConfirm").required = isRegister;
+  authCaptchaCode.required = isRegister;
+  if (isRegister && !authCaptchaId.value) refreshCaptcha();
+}
+
 async function refreshCaptcha() {
   try {
     const captcha = await api(`/api/auth/captcha?t=${Date.now()}`);
@@ -1007,24 +1027,13 @@ stageEdit.addEventListener("click", (event) => continueEditingActiveResult(event
 $("authForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = event.submitter;
-  setButtonLoading(button, true, "登录中");
+  const isRegister = authMode === "register";
+  setButtonLoading(button, true, isRegister ? "注册中" : "登录中");
   try {
-    await loginOrRegister("/api/auth/login");
+    await loginOrRegister(isRegister ? "/api/auth/register" : "/api/auth/login");
   } catch (error) {
     showToast(error.message, "error");
-  } finally {
-    setButtonLoading(button, false);
-  }
-});
-
-$("registerButton").addEventListener("click", async () => {
-  const button = $("registerButton");
-  setButtonLoading(button, true, "注册中");
-  try {
-    await loginOrRegister("/api/auth/register");
-  } catch (error) {
-    showToast(error.message, "error");
-    refreshCaptcha();
+    if (isRegister) refreshCaptcha();
   } finally {
     setButtonLoading(button, false);
   }
@@ -1032,12 +1041,14 @@ $("registerButton").addEventListener("click", async () => {
 
 function openAuthDialog(reason) {
   if (reason) showToast(reason, "error");
+  setAuthMode("login");
   if (!authDialog.open) authDialog.showModal();
-  if (!authCaptchaId.value) refreshCaptcha();
 }
 
 $("loginButton").addEventListener("click", () => openAuthDialog());
 $("closeAuth").addEventListener("click", () => authDialog.close());
+$("authLoginMode").addEventListener("click", () => setAuthMode("login"));
+$("authRegisterMode").addEventListener("click", () => setAuthMode("register"));
 $("refreshCaptcha").addEventListener("click", refreshCaptcha);
 authDialog.addEventListener("click", (event) => {
   const rect = authDialog.getBoundingClientRect();

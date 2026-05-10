@@ -107,7 +107,6 @@ a { color: inherit; }
 .brand-row {
   display: flex;
   align-items: center;
-  gap: 9px;
   min-width: 0;
 }
 
@@ -1516,8 +1515,41 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
   padding: 22px;
 }
 
+.auth-heading {
+  display: grid;
+  gap: 12px;
+}
+
 .auth-box h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
 .auth-box p  { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+
+.auth-mode-switch button {
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  transition: all var(--ease);
+}
+
+.auth-mode-switch button.active {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
 
 .auth-box label {
   display: grid;
