@@ -22,9 +22,12 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class ImageService {
+  private static final Logger log = LoggerFactory.getLogger(ImageService.class);
   private final Db db;
   private final SecurityService security;
   private final AuthService auth;
@@ -157,6 +160,7 @@ public class ImageService {
     } catch (Exception exception) {
       String code = exception instanceof QueueService.QueueOverloadedException ? "QUEUE_OVERLOADED" : "QUEUE_UNAVAILABLE";
       String message = exception instanceof QueueService.QueueOverloadedException ? exception.getMessage() : "任务队列当前不可用";
+      log.error("[task={}] Queue error code={} message={}", task.id(), code, message, exception);
       failTask(task, code, message, true);
       throw AppException.unavailable(code, message);
     }
@@ -237,12 +241,15 @@ public class ImageService {
     } catch (Exception exception) {
       if (exception instanceof StorageService.StorageException || exception.getCause() instanceof StorageService.StorageException) {
         String message = exception.getMessage() == null ? "结果存储失败" : exception.getMessage();
+        log.error("[task={}] Storage error: {}", task.id(), message, exception);
         return failTask(task, "STORAGE_FAILED", message, true);
       }
       UpstreamException upstreamException = upstreamException(exception);
       String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
       String code = upstreamException == null ? "UPSTREAM_FAILED" : upstreamException.code();
       boolean retryable = upstreamException == null || upstreamException.retryable();
+      log.error("[task={}] Gateway error gateway={} code={} attempt={}/{} retryable={} message={}",
+        task.id(), gateway.name(), code, attempt, maxAttempts, retryable, message, exception);
       recordGatewayFailure(gateway, message, System.currentTimeMillis() - started, code);
       if (retryable && attempt < maxAttempts) {
         db.jdbc().update("""

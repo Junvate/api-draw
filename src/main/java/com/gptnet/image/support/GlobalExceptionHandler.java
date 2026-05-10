@@ -20,6 +20,11 @@ public class GlobalExceptionHandler {
 
   @ExceptionHandler(AppException.class)
   ResponseEntity<Map<String, Object>> app(AppException exception) {
+    if (exception.status().value() >= 500) {
+      log.error("App error status={} code={} message={}", exception.status().value(), exception.code(), exception.getMessage());
+    } else {
+      log.warn("App error status={} code={} message={}", exception.status().value(), exception.code(), exception.getMessage());
+    }
     return ResponseEntity.status(exception.status()).body(Maps.of(
       "error", exception.code(),
       "message", exception.getMessage()
