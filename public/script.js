@@ -749,9 +749,8 @@ function setAuthMode(mode) {
   authMode = mode === "register" ? "register" : "login";
   const isRegister = authMode === "register";
   $("authTitle").textContent = isRegister ? "注册账号" : "登录平台";
-  $("authDescription").textContent = isRegister
-    ? "注册需要填写重复密码和 4 位验证码。"
-    : "请输入真实账号登录。若未创建管理员，可通过环境变量注入首个后台账号。";
+  $("authDescription").textContent = isRegister ? "注册需要填写重复密码和 4 位验证码。" : "";
+  $("authDescription").classList.toggle("hidden", !isRegister);
   $("authSubmitButton").textContent = isRegister ? "注册" : "登录";
   $("authLoginMode").classList.toggle("active", !isRegister);
   $("authRegisterMode").classList.toggle("active", isRegister);
