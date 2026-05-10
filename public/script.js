@@ -713,10 +713,12 @@ async function loginOrRegister(path) {
   const { user } = await api(path, { method: "POST", body: JSON.stringify(payload) });
   updateAccount(user);
   authDialog.close();
-  const jobs = await refreshJobs({ silent: true });
-  await loadAdmin({ silent: true });
-  hydrateWorkspaceFromJobs(jobs, { preferLatest: true });
   showToast(path.includes("register") ? "注册成功，已发放新用户积分" : "登录成功");
+  // 后台刷新，不阻塞 UI
+  refreshJobs({ silent: true }).then((jobs) => {
+    if (jobs) hydrateWorkspaceFromJobs(jobs, { preferLatest: true });
+  });
+  loadAdmin({ silent: true });
 }
 
 function hydrateWorkspaceFromJobs(jobs, { preferLatest = false } = {}) {
@@ -1117,7 +1119,7 @@ refreshMe().then(async (user) => {
   function reasonLabel(r) { return REASON_LABEL[r] || r; }
   function amountHtml(n) {
     const s = n > 0 ? `+${n}` : String(n);
-    return `<span style="color:${n > 0 ? "var(--green,#38a169)" : "var(--red,#e53e3e)");font-weight:600">${s}</span>`;
+    return `<span style="color:${n > 0 ? "var(--green,#38a169)" : "var(--red,#e53e3e)"};font-weight:600">${s}</span>`;
   }
 
   function renderEntries(entries, append) {
