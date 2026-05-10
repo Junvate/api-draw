@@ -1,0 +1,604 @@
+package com.gptnet.image.service;
+
+import com.gptnet.image.dto.AdminDtos.AdminCreateUserRequest;
+import com.gptnet.image.dto.AdminDtos.CreditsRequest;
+import com.gptnet.image.dto.AdminDtos.GatewayRequest;
+import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
+import com.gptnet.image.dto.AdminDtos.RedemptionCodeRequest;
+import com.gptnet.image.model.Gateway;
+import com.gptnet.image.model.ImageTask;
+import com.gptnet.image.model.RedemptionCode;
+import com.gptnet.image.model.User;
+import com.gptnet.image.support.AppException;
+import com.gptnet.image.support.Ids;
+import com.gptnet.image.support.Json;
+import com.gptnet.image.support.Maps;
+import jakarta.servlet.http.HttpServletRequest;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class AdminService {
+  private final Db db;
+  private final SecurityService security;
+  private final AuthService auth;
+  private final ImageService imageService;
+  private final UpstreamClient upstream;
+
+  public AdminService(Db db, SecurityService security, AuthService auth, ImageService imageService, UpstreamClient upstream) {
+    this.db = db;
+    this.security = security;
+    this.auth = auth;
+    this.imageService = imageService;
+    this.upstream = upstream;
+  }
+
+  public Map<String, Object> summary() {
+    int users = count("User", null);
+    int orders = count("Order", null);
+    Integer paidRevenue = db.jdbc().queryForObject("""
+      SELECT COALESCE(SUM("amountCents"), 0) FROM "Order" WHERE "status" = 'paid'::"OrderStatus"
+      """, Map.of(), Integer.class);
+    int jobs = count("ImageTask", null);
+    int activeGateways = count("Gateway", "\"enabled\" = true");
+    Integer issued = db.jdbc().queryForObject("SELECT COALESCE(SUM(\"amount\"), 0) FROM \"WalletEntry\" WHERE \"amount\" > 0", Map.of(), Integer.class);
+    Integer spent = db.jdbc().queryForObject("SELECT COALESCE(SUM(\"amount\"), 0) FROM \"WalletEntry\" WHERE \"amount\" < 0", Map.of(), Integer.class);
+    return Maps.of(
+      "users", users,
+      "orders", orders,
+      "paidRevenueCents", paidRevenue == null ? 0 : paidRevenue,
+      "jobs", jobs,
+      "activeGateways", activeGateways,
+      "creditIssued", issued == null ? 0 : issued,
+      "creditSpent", Math.abs(spent == null ? 0 : spent),
+      "gateways", db.gateways()
+    );
+  }
+
+  public Map<String, Object> usage(int rawDays) {
+    int days = Math.min(Math.max(rawDays, 1), 90);
+    LocalDate startDate = LocalDate.now(ZoneOffset.UTC).minusDays(days - 1L);
+    Instant start = startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
+    List<ImageTask> tasks = db.jdbc().query("""
+      SELECT * FROM "ImageTask" WHERE "createdAt" >= :start ORDER BY "createdAt"
+      """, Map.of("start", java.sql.Timestamp.from(start)), db.imageTaskMapper());
+    Map<String, Map<String, Object>> daily = new LinkedHashMap<>();
+    for (int index = 0; index < days; index += 1) {
+      String key = startDate.plusDays(index).toString();
+      daily.put(key, Maps.of("date", key, "jobs", 0, "succeeded", 0, "failed", 0, "credits", 0));
+    }
+    Map<String, Integer> byModel = new LinkedHashMap<>();
+    Map<String, Integer> byGateway = new LinkedHashMap<>();
+    for (ImageTask task : tasks) {
+      String key = task.createdAt().atZone(ZoneOffset.UTC).toLocalDate().toString();
+      Map<String, Object> item = daily.get(key);
+      if (item != null) {
+        item.put("jobs", ((Number) item.get("jobs")).intValue() + 1);
+        if ("success".equals(task.status())) item.put("succeeded", ((Number) item.get("succeeded")).intValue() + 1);
+        if ("failed".equals(task.status())) item.put("failed", ((Number) item.get("failed")).intValue() + 1);
+        item.put("credits", ((Number) item.get("credits")).intValue() + task.costCredits());
+      }
+      byModel.merge(task.model(), 1, Integer::sum);
+      byGateway.merge(task.gatewayId() == null ? "unknown" : task.gatewayId(), 1, Integer::sum);
+    }
+    long completed = tasks.stream().filter(task -> List.of("success", "failed").contains(task.status())).count();
+    long succeeded = tasks.stream().filter(task -> "success".equals(task.status())).count();
+    int credits = tasks.stream().mapToInt(ImageTask::costCredits).sum();
+    return Maps.of(
+      "days", days,
+      "totals", Maps.of(
+        "jobs", tasks.size(),
+        "succeeded", succeeded,
+        "failed", completed - succeeded,
+        "successRate", completed == 0 ? 0 : Math.round((succeeded * 100.0) / completed),
+        "credits", credits
+      ),
+      "daily", new ArrayList<>(daily.values()),
+      "byModel", byModel.entrySet().stream().map(e -> Maps.of("model", e.getKey(), "jobs", e.getValue())).toList(),
+      "byGateway", byGateway.entrySet().stream().map(e -> Maps.of("gatewayId", e.getKey(), "jobs", e.getValue())).toList()
+    );
+  }
+
+  public Map<String, Object> users() {
+    List<User> users = db.jdbc().query("SELECT * FROM \"User\" ORDER BY \"createdAt\" DESC", Map.of(), db.userMapper());
+    return Maps.of("users", users.stream().map(auth::publicUser).toList());
+  }
+
+  @Transactional
+  public Map<String, Object> createUser(User actor, HttpServletRequest request, AdminCreateUserRequest body) {
+    String email = body.getEmail() == null ? "" : body.getEmail().trim().toLowerCase();
+    String id = db.id();
+    String status = Optional.ofNullable(body.getStatus()).filter(s -> !s.isBlank()).orElse("active");
+    db.jdbc().update("""
+      INSERT INTO "User" ("id", "email", "name", "passwordHash", "role", "status")
+      VALUES (:id, :email, :name, :passwordHash, 'user'::"UserRole", CAST(:status AS "UserStatus"))
+      """, new MapSqlParameterSource()
+      .addValue("id", id)
+      .addValue("email", email)
+      .addValue("name", body.getName() == null || body.getName().isBlank() ? email.split("@")[0] : body.getName().trim())
+      .addValue("passwordHash", security.hashPassword(body.getPassword()))
+      .addValue("status", status));
+    if (body.getCredits() != null && body.getCredits() > 0) {
+      auth.lockUserWallet(id);
+      auth.addWalletEntry(id, body.getCredits(), "admin_adjust", Ids.id(), actor.id());
+    }
+    audit(actor, request, "user.create", id, Maps.of("email", email, "status", status, "credits", body.getCredits() == null ? 0 : body.getCredits()));
+    return Maps.of("user", auth.publicUser(db.userById(id).orElseThrow()));
+  }
+
+  @Transactional
+  public Map<String, Object> patchUser(User actor, HttpServletRequest request, String id, PatchUserRequest body) {
+    User current = db.userById(id).orElseThrow(() -> AppException.notFound("用户不存在"));
+    String nextStatus = body.getStatus() == null ? current.status() : body.getStatus();
+    if ("admin".equals(current.role()) && "active".equals(current.status()) && !"active".equals(nextStatus)) {
+      if (actor.id().equals(id)) throw AppException.badRequest("SELF_ADMIN_LOCKOUT", "不能停用当前登录管理员");
+      Integer activeAdminCount = db.jdbc().queryForObject("""
+        SELECT count(*) FROM "User" WHERE "role" = 'admin'::"UserRole" AND "status" = 'active'::"UserStatus"
+        """, Map.of(), Integer.class);
+      if (activeAdminCount != null && activeAdminCount <= 1) throw AppException.badRequest("LAST_ADMIN", "至少保留一个可用管理员账号");
+    }
+    db.jdbc().update("""
+      UPDATE "User" SET "status" = CAST(:status AS "UserStatus"), "updatedAt" = now()
+      WHERE "id" = :id
+      """, Map.of("id", id, "status", nextStatus));
+    audit(actor, request, "user.update", id, Maps.of("status", nextStatus));
+    return Maps.of("user", auth.publicUser(db.userById(id).orElseThrow()));
+  }
+
+  @Transactional
+  public Map<String, Object> credits(User actor, HttpServletRequest request, CreditsRequest body) {
+    if (body.getUserId() == null || body.getAmount() == null) {
+      throw AppException.badRequest("VALIDATION_FAILED", "用户和积分不能为空");
+    }
+    db.userById(body.getUserId()).orElseThrow(() -> AppException.notFound("用户不存在"));
+    auth.lockUserWallet(body.getUserId());
+    String ref = Ids.id();
+    auth.addWalletEntry(body.getUserId(), body.getAmount(), "admin_adjust", ref, actor.id());
+    audit(actor, request, "credits.change", body.getUserId(), Maps.of("amount", body.getAmount(), "reason", Optional.ofNullable(body.getReason()).orElse("admin_adjust")));
+    return Maps.of("user", auth.publicUser(db.userById(body.getUserId()).orElseThrow(() -> AppException.notFound("用户不存在"))));
+  }
+
+  public Map<String, Object> gateways() {
+    return Maps.of("gateways", db.gateways().stream().map(this::publicGateway).toList());
+  }
+
+  @Transactional
+  public Map<String, Object> createGateway(User actor, HttpServletRequest request, GatewayRequest body) {
+    String name = Optional.ofNullable(body.getName()).orElse("").trim();
+    if (name.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "渠道名称不能为空");
+    String id = db.id();
+    String secret = Optional.ofNullable(body.getApiKey()).orElse("").trim();
+    validateGatewayInput(body, secret);
+    db.jdbc().update("""
+      INSERT INTO "Gateway" (
+        "id", "name", "provider", "baseUrl", "apiKeyEnv", "apiKeyCiphertext", "healthCheckPath",
+        "generationPath", "upstreamGroup", "model", "costCredits", "timeoutMs", "enabled", "priority"
+      )
+      VALUES (
+        :id, :name, CAST(:provider AS "GatewayProvider"), :baseUrl, NULL, :apiKeyCiphertext, :healthCheckPath,
+        :generationPath, :upstreamGroup, :model, :costCredits, :timeoutMs, :enabled, :priority
+      )
+      """, gatewayParams(id, body)
+      .addValue("name", name)
+      .addValue("apiKeyCiphertext", secret.isBlank() ? null : security.encryptSecret(secret)));
+    Gateway gateway = db.gatewayById(id).orElseThrow();
+    audit(actor, request, "gateway.create", id, Maps.of("name", gateway.name(), "provider", gateway.provider(), "model", gateway.model()));
+    return Maps.of("gateway", publicGateway(gateway));
+  }
+
+  @Transactional
+  public Map<String, Object> patchGateway(User actor, HttpServletRequest request, String id, GatewayRequest body) {
+    Gateway current = db.gatewayById(id).orElseThrow(() -> AppException.notFound("渠道不存在"));
+    String incomingSecret = body.getApiKey() == null ? null : body.getApiKey().trim();
+    validateGatewayInput(body, incomingSecret);
+    MapSqlParameterSource params = gatewayParams(id, body)
+      .addValue("name", Optional.ofNullable(body.getName()).filter(s -> !s.isBlank()).orElse(current.name()))
+      .addValue("provider", Optional.ofNullable(body.getProvider()).filter(s -> !s.isBlank()).orElse(current.provider()))
+      .addValue("baseUrl", Optional.ofNullable(body.getBaseUrl()).filter(s -> !s.isBlank()).orElse(current.baseUrl()))
+      .addValue("healthCheckPath", normalizePath(body.getHealthCheckPath(), current.healthCheckPath(), "/models"))
+      .addValue("generationPath", normalizePath(body.getGenerationPath(), current.generationPath(), "/images/generations"))
+      .addValue("upstreamGroup", body.getUpstreamGroup() == null ? current.upstreamGroup() : blankToNull(body.getUpstreamGroup()))
+      .addValue("model", Optional.ofNullable(body.getModel()).filter(s -> !s.isBlank()).orElse(current.model()))
+      .addValue("costCredits", body.getCostCredits() == null ? current.costCredits() : body.getCostCredits())
+      .addValue("timeoutMs", body.getTimeoutMs() == null ? current.timeoutMs() : body.getTimeoutMs())
+      .addValue("enabled", body.getEnabled() == null ? current.enabled() : body.getEnabled())
+      .addValue("priority", body.getPriority() == null ? current.priority() : body.getPriority())
+      .addValue("healthStatus", Optional.ofNullable(body.getHealthStatus()).filter(s -> !s.isBlank()).orElse(current.healthStatus()))
+      .addValue("consecutiveFailures", body.getConsecutiveFailures() == null ? current.consecutiveFailures() : body.getConsecutiveFailures());
+    if (body.getApiKey() == null) {
+      params.addValue("apiKeyCiphertext", current.apiKeyCiphertext());
+    } else {
+      String secret = body.getApiKey().trim();
+      params.addValue("apiKeyCiphertext", isMaskedSecret(secret) ? current.apiKeyCiphertext() : (secret.isBlank() ? null : security.encryptSecret(secret)));
+    }
+    db.jdbc().update("""
+      UPDATE "Gateway" SET
+        "name" = :name,
+        "provider" = CAST(:provider AS "GatewayProvider"),
+        "baseUrl" = :baseUrl,
+        "apiKeyEnv" = NULL,
+        "apiKeyCiphertext" = :apiKeyCiphertext,
+        "healthCheckPath" = :healthCheckPath,
+        "generationPath" = :generationPath,
+        "upstreamGroup" = :upstreamGroup,
+        "model" = :model,
+        "costCredits" = :costCredits,
+        "timeoutMs" = :timeoutMs,
+        "enabled" = :enabled,
+        "priority" = :priority,
+        "healthStatus" = CAST(:healthStatus AS "GatewayHealth"),
+        "consecutiveFailures" = :consecutiveFailures,
+        "updatedAt" = now()
+      WHERE "id" = :id
+      """, params);
+    audit(actor, request, "gateway.update", id, publicPatchBody(body));
+    return Maps.of("gateway", publicGateway(db.gatewayById(id).orElseThrow()));
+  }
+
+  @Transactional
+  public Map<String, Object> deleteGateway(User actor, HttpServletRequest request, String id) {
+    Gateway gateway = db.gatewayById(id).orElseThrow(() -> AppException.notFound("渠道不存在"));
+    Integer attached = db.jdbc().queryForObject("""
+      SELECT count(*) FROM "ImageTask" WHERE "gatewayId" = :id AND "status" IN ('queued'::"ImageTaskStatus", 'processing'::"ImageTaskStatus")
+      """, Map.of("id", id), Integer.class);
+    if (attached != null && attached > 0) throw AppException.badRequest("GATEWAY_IN_USE", "该渠道仍有进行中的任务，暂时不能删除");
+    db.jdbc().update("DELETE FROM \"Gateway\" WHERE \"id\" = :id", Map.of("id", id));
+    audit(actor, request, "gateway.delete", id, Maps.of("name", gateway.name(), "provider", gateway.provider(), "model", gateway.model()));
+    return Maps.of("ok", true, "id", id);
+  }
+
+  public Map<String, Object> health(User actor, HttpServletRequest request, String id) {
+    Gateway gateway = db.gatewayById(id).orElseThrow(() -> AppException.notFound("渠道不存在"));
+    long started = System.currentTimeMillis();
+    String apiKey = imageService.resolveGatewayApiKey(gateway, false);
+    String keyError = gateway.apiKeyCiphertext() != null ? "渠道 API Key 无法解密，请重新保存该渠道密钥" : "渠道 API Key 未配置";
+    if (apiKey == null) {
+      Gateway updated = updateGatewayHealth(id, "degraded", false, started, keyError);
+      audit(actor, request, "gateway.health_check", id, Maps.of("ok", false, "error", keyError, "latencyMs", System.currentTimeMillis() - started));
+      return Maps.of("gateway", publicGateway(updated), "ok", false, "latencyMs", System.currentTimeMillis() - started, "error", keyError);
+    }
+    try {
+      String path = Optional.ofNullable(gateway.healthCheckPath()).filter(s -> !s.isBlank()).orElse("/models");
+      boolean useChatPing = path.contains("chat/completions");
+      Map<String, Object> body = null;
+      if (useChatPing) {
+        body = Maps.of(
+          "model", gateway.model(),
+          "messages", List.of(Maps.of("role", "user", "content", "ping")),
+          "stream", false
+        );
+        if (gateway.upstreamGroup() != null && !gateway.upstreamGroup().isBlank()) body.put("group", gateway.upstreamGroup());
+      }
+      var response = upstream.json(imageService.upstreamUrl(gateway.baseUrl(), path), useChatPing ? "POST" : "GET",
+        Map.of("Authorization", "Bearer " + apiKey), body, Math.min(gateway.timeoutMs(), 10000));
+      if (!response.ok()) throw new RuntimeException(upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status()));
+      Gateway updated = updateGatewayHealth(id, "healthy", true, started, null);
+      audit(actor, request, "gateway.health_check", id, Maps.of("ok", true, "latencyMs", System.currentTimeMillis() - started));
+      return Maps.of("gateway", publicGateway(updated), "ok", true, "latencyMs", System.currentTimeMillis() - started);
+    } catch (Exception exception) {
+      String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
+      Gateway updated = updateGatewayHealth(id, "degraded", false, started, message);
+      audit(actor, request, "gateway.health_check", id, Maps.of("ok", false, "error", message, "latencyMs", System.currentTimeMillis() - started));
+      return Maps.of("gateway", publicGateway(updated), "ok", false, "latencyMs", System.currentTimeMillis() - started, "error", message);
+    }
+  }
+
+  public Map<String, Object> healthAll(User actor, HttpServletRequest request) {
+    List<Map<String, Object>> results = new ArrayList<>();
+    for (Gateway gateway : db.gateways()) results.add(health(actor, request, gateway.id()));
+    audit(actor, request, "gateway.health_check_all", "gateways", Maps.of("total", results.size(), "ok", results.stream().filter(item -> Boolean.TRUE.equals(item.get("ok"))).count()));
+    return Maps.of("results", results);
+  }
+
+  public Map<String, Object> jobs(int rawLimit) {
+    int limit = Math.min(Math.max(rawLimit, 1), 500);
+    List<ImageTask> tasks = db.recentTasks(limit).stream().map(db::hydrateTask).toList();
+    return Maps.of("jobs", tasks.stream().map(task -> {
+      Map<String, Object> item = Maps.of(
+        "id", task.id(),
+        "userId", task.userId(),
+        "apiKeyId", task.apiKeyId(),
+        "gatewayId", task.gatewayId(),
+        "requestId", task.requestId(),
+        "model", task.model(),
+        "prompt", task.prompt(),
+        "size", task.size(),
+        "quality", task.quality(),
+        "outputFormat", task.outputFormat(),
+        "background", task.background(),
+        "imageCount", task.imageCount(),
+        "status", adminStatus(task.status()),
+        "errorCode", task.errorCode(),
+        "errorMessage", task.errorMessage(),
+        "retryCount", task.retryCount(),
+        "maxRetries", task.maxRetries(),
+        "costCredits", task.costCredits(),
+        "latencyMs", task.latencyMs(),
+        "startedAt", task.startedAt(),
+        "finishedAt", task.finishedAt(),
+        "createdAt", task.createdAt(),
+        "updatedAt", task.updatedAt(),
+        "resultUrl", task.results().isEmpty() ? null : task.results().get(0).url(),
+        "userEmail", task.user() == null ? null : task.user().email(),
+        "userName", task.user() == null ? null : task.user().name()
+      );
+      return item;
+    }).toList());
+  }
+
+  public Map<String, Object> auditLogs(int rawLimit) {
+    int limit = Math.min(Math.max(rawLimit, 1), 500);
+    List<Map<String, Object>> logs = db.jdbc().query("""
+      SELECT l.*, u."email" AS "actorEmail", u."name" AS "actorName"
+      FROM "AuditLog" l
+      LEFT JOIN "User" u ON u."id" = l."actorId"
+      ORDER BY l."createdAt" DESC
+      LIMIT :limit
+      """, Map.of("limit", limit), (rs, rowNum) -> Maps.of(
+        "id", rs.getString("id"),
+        "actorId", rs.getString("actorId"),
+        "action", rs.getString("action"),
+        "targetId", rs.getString("targetId"),
+        "meta", jsonValue(rs.getString("meta")),
+        "ip", rs.getString("ip"),
+        "createdAt", db.instant(rs, "createdAt"),
+        "actorEmail", rs.getString("actorEmail"),
+        "actorName", rs.getString("actorName")
+      ));
+    return Maps.of("logs", logs);
+  }
+
+  public Map<String, Object> codes() {
+    return Maps.of("codes", db.jdbc().query("SELECT * FROM \"RedemptionCode\" ORDER BY \"createdAt\" DESC", Map.of(), db.redemptionCodeMapper()));
+  }
+
+  @Transactional
+  public Map<String, Object> createCode(User actor, HttpServletRequest request, RedemptionCodeRequest body) {
+    String code = Optional.ofNullable(body.getCode()).filter(s -> !s.isBlank()).orElse(Ids.randomBase62(8)).trim().toUpperCase();
+    String activityKey = normalizeActivityKey(body.getActivityKey(), code);
+    db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"code\" = :code", Map.of("code", code), db.redemptionCodeMapper())
+      .ifPresent(existing -> { throw AppException.conflict("CODE_EXISTS", "兑换码已存在，请更换一个新的代码"); });
+    String id = db.id();
+    db.jdbc().update("""
+      INSERT INTO "RedemptionCode" ("id", "code", "activityKey", "credits", "maxUses", "usedBy", "expiresAt", "active")
+      VALUES (:id, :code, :activityKey, :credits, :maxUses, ARRAY[]::TEXT[], :expiresAt, true)
+      """, new MapSqlParameterSource()
+      .addValue("id", id)
+      .addValue("code", code)
+      .addValue("activityKey", activityKey)
+      .addValue("credits", body.getCredits() == null ? 100 : body.getCredits())
+      .addValue("maxUses", body.getMaxUses() == null ? 1 : body.getMaxUses())
+      .addValue("expiresAt", body.getExpiresAt() == null || body.getExpiresAt().isBlank() ? null : java.sql.Timestamp.from(Instant.parse(body.getExpiresAt()))));
+    RedemptionCode record = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper()).orElseThrow();
+    audit(actor, request, "redemption_code.create", id, Maps.of("code", code, "activityKey", activityKey, "credits", record.credits(), "maxUses", record.maxUses()));
+    return Maps.of("code", record);
+  }
+
+  @Transactional
+  public Map<String, Object> patchCode(User actor, HttpServletRequest request, String id, RedemptionCodeRequest body) {
+    RedemptionCode current = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper())
+      .orElseThrow(() -> AppException.notFound("兑换码不存在"));
+    Object expiresAt = current.expiresAt() == null ? null : java.sql.Timestamp.from(current.expiresAt());
+    if (body.getExpiresAt() != null && !body.getExpiresAt().isBlank()) {
+      expiresAt = java.sql.Timestamp.from(Instant.parse(body.getExpiresAt()));
+    }
+    String nextActivityKey = normalizeActivityKey(body.getActivityKey(), current.activityKey());
+    if (!nextActivityKey.equals(current.activityKey()) && !current.usedBy().isEmpty()) {
+      throw AppException.badRequest("CODE_ALREADY_USED", "兑换码已有使用记录，不能修改活动标识");
+    }
+    db.jdbc().update("""
+      UPDATE "RedemptionCode" SET
+        "activityKey" = :activityKey,
+        "credits" = :credits,
+        "maxUses" = :maxUses,
+        "expiresAt" = :expiresAt,
+        "active" = :active,
+        "updatedAt" = now()
+      WHERE "id" = :id
+      """, new MapSqlParameterSource()
+      .addValue("id", id)
+      .addValue("activityKey", nextActivityKey)
+      .addValue("credits", body.getCredits() == null ? current.credits() : body.getCredits())
+      .addValue("maxUses", body.getMaxUses() == null ? current.maxUses() : body.getMaxUses())
+      .addValue("expiresAt", expiresAt)
+      .addValue("active", body.getActive() == null ? current.active() : body.getActive()));
+    RedemptionCode record = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper()).orElseThrow();
+    audit(actor, request, "redemption_code.update", id, publicPatchBody(body));
+    return Maps.of("code", record);
+  }
+
+  private String normalizeActivityKey(String value, String fallback) {
+    String raw = Optional.ofNullable(value).filter(s -> !s.isBlank()).orElse(fallback);
+    return raw.trim().toUpperCase().replaceAll("[^A-Z0-9_-]", "-");
+  }
+
+  public Map<String, Object> publicGateway(Gateway gateway) {
+    String secret = security.decryptSecret(gateway.apiKeyCiphertext());
+    Map<String, Object> map = Maps.of(
+      "id", gateway.id(),
+      "name", gateway.name(),
+      "provider", gateway.provider(),
+      "baseUrl", gateway.baseUrl(),
+      "healthCheckPath", gateway.healthCheckPath(),
+      "generationPath", gateway.generationPath(),
+      "upstreamGroup", gateway.upstreamGroup(),
+      "model", gateway.model(),
+      "costCredits", gateway.costCredits(),
+      "timeoutMs", gateway.timeoutMs(),
+      "enabled", gateway.enabled(),
+      "priority", gateway.priority(),
+      "healthStatus", gateway.healthStatus(),
+      "consecutiveFailures", gateway.consecutiveFailures(),
+      "disabledUntil", gateway.disabledUntil(),
+      "lastCheckedAt", gateway.lastCheckedAt(),
+      "lastSuccessAt", gateway.lastSuccessAt(),
+      "lastFailureAt", gateway.lastFailureAt(),
+      "lastLatencyMs", gateway.lastLatencyMs(),
+      "lastError", gateway.lastError(),
+      "createdAt", gateway.createdAt(),
+      "updatedAt", gateway.updatedAt(),
+      "apiKey", secret == null ? "" : security.maskSecret(secret),
+      "apiKeyConfigured", secret != null && !secret.isBlank()
+    );
+    return map;
+  }
+
+  public void audit(User actor, HttpServletRequest request, String action, String targetId, Object meta) {
+    try {
+      db.jdbc().update("""
+        INSERT INTO "AuditLog" ("id", "actorId", "action", "targetId", "meta", "ip")
+        VALUES (:id, :actorId, :action, :targetId, CAST(:meta AS jsonb), :ip)
+        """, new MapSqlParameterSource()
+        .addValue("id", db.id())
+        .addValue("actorId", actor == null ? null : actor.id())
+        .addValue("action", action)
+        .addValue("targetId", targetId)
+        .addValue("meta", Json.MAPPER.writeValueAsString(meta == null ? Map.of() : meta))
+        .addValue("ip", request == null ? null : request.getRemoteAddr()));
+    } catch (Exception ignored) {
+    }
+  }
+
+  private Gateway updateGatewayHealth(String id, String status, boolean success, long started, String error) {
+    int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
+    if (success) {
+      db.jdbc().update("""
+        UPDATE "Gateway" SET
+          "healthStatus" = 'healthy'::"GatewayHealth",
+          "consecutiveFailures" = 0,
+          "disabledUntil" = NULL,
+          "lastCheckedAt" = now(),
+          "lastSuccessAt" = now(),
+          "lastLatencyMs" = :latencyMs,
+          "lastError" = NULL,
+          "updatedAt" = now()
+        WHERE "id" = :id
+        """, Map.of("id", id, "latencyMs", latencyMs));
+    } else {
+      db.jdbc().update("""
+        UPDATE "Gateway" SET
+          "healthStatus" = CAST(:status AS "GatewayHealth"),
+          "consecutiveFailures" = "consecutiveFailures" + 1,
+          "lastCheckedAt" = now(),
+          "lastFailureAt" = now(),
+          "lastLatencyMs" = :latencyMs,
+          "lastError" = :error,
+          "updatedAt" = now()
+        WHERE "id" = :id
+        """, new MapSqlParameterSource()
+        .addValue("id", id)
+        .addValue("status", status)
+        .addValue("latencyMs", latencyMs)
+        .addValue("error", truncate(error, 1000)));
+    }
+    return db.gatewayById(id).orElseThrow();
+  }
+
+  private MapSqlParameterSource gatewayParams(String id, GatewayRequest body) {
+    return new MapSqlParameterSource()
+      .addValue("id", id)
+      .addValue("provider", Optional.ofNullable(body.getProvider()).filter(s -> !s.isBlank()).orElse("openai"))
+      .addValue("baseUrl", Optional.ofNullable(body.getBaseUrl()).filter(s -> !s.isBlank()).orElse("https://api.openai.com/v1").trim())
+      .addValue("healthCheckPath", Optional.ofNullable(body.getHealthCheckPath()).filter(s -> !s.isBlank()).orElse("/models").trim())
+      .addValue("generationPath", Optional.ofNullable(body.getGenerationPath()).filter(s -> !s.isBlank()).orElse("/images/generations").trim())
+      .addValue("upstreamGroup", blankToNull(body.getUpstreamGroup()))
+      .addValue("model", Optional.ofNullable(body.getModel()).filter(s -> !s.isBlank()).orElse("gpt-image-2").trim())
+      .addValue("costCredits", body.getCostCredits() == null ? 8 : body.getCostCredits())
+      .addValue("timeoutMs", body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs())
+      .addValue("enabled", Boolean.TRUE.equals(body.getEnabled()))
+      .addValue("priority", body.getPriority() == null ? 1 : body.getPriority());
+  }
+
+  private void validateGatewayInput(GatewayRequest body, String apiKey) {
+    String baseUrl = Optional.ofNullable(body.getBaseUrl()).orElse("").trim();
+    if (!baseUrl.isBlank() && !baseUrl.matches("(?i)^https?://.+")) {
+      throw AppException.badRequest("INVALID_GATEWAY_BASE_URL", "Base URL 必须是 http:// 或 https:// 地址");
+    }
+    if (apiKey != null && !apiKey.isBlank() && !isMaskedSecret(apiKey)) {
+      if (apiKey.matches("(?i)^https?://.*")) {
+        throw AppException.badRequest("INVALID_GATEWAY_API_KEY", "API Key 不能填写 URL，请填写渠道提供的 sk-... 密钥");
+      }
+      if (apiKey.length() < 12 || apiKey.contains(" ")) {
+        throw AppException.badRequest("INVALID_GATEWAY_API_KEY", "API Key 格式不正确，请填写完整渠道密钥");
+      }
+    }
+  }
+
+  private boolean isMaskedSecret(String value) {
+    if (value == null || value.isBlank()) return false;
+    return value.matches("^[*•]+$") || value.contains("****");
+  }
+
+  private String normalizePath(String incoming, String current, String fallback) {
+    if (incoming == null) return current;
+    String value = incoming.trim();
+    return value.isBlank() ? fallback : value;
+  }
+
+  private String blankToNull(String value) {
+    if (value == null) return null;
+    String trimmed = value.trim();
+    return trimmed.isBlank() ? null : trimmed;
+  }
+
+  private Object jsonValue(String raw) {
+    if (raw == null || raw.isBlank()) return Map.of();
+    try {
+      return Json.MAPPER.readValue(raw, Json.MAP);
+    } catch (Exception ignored) {
+      return Map.of();
+    }
+  }
+
+  private Map<String, Object> publicPatchBody(Object body) {
+    return Json.MAPPER.convertValue(body, Json.MAP);
+  }
+
+  private String adminStatus(String status) {
+    if ("success".equals(status)) return "succeeded";
+    if ("processing".equals(status)) return "running";
+    return status;
+  }
+
+  public Map<String, Object> getSettings() {
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("buy_credits_url", "");
+    db.jdbc().query("SELECT \"key\", \"value\" FROM \"SiteSetting\"", Map.of(),
+      rs -> { result.put(rs.getString("key"), rs.getString("value")); });
+    return result;
+  }
+
+  public Map<String, Object> patchSettings(Map<String, String> body) {
+    List<String> allowed = List.of("buy_credits_url");
+    for (String key : allowed) {
+      if (!body.containsKey(key)) continue;
+      String value = body.get(key) == null ? "" : body.get(key).trim();
+      db.jdbc().update("""
+        INSERT INTO "SiteSetting" ("key", "value", "updatedAt")
+        VALUES (:key, :value, now())
+        ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = now()
+        """, Map.of("key", key, "value", value));
+    }
+    return getSettings();
+  }
+
+  private int count(String table, String where) {
+    String sql = "SELECT count(*) FROM \"" + table + "\"" + (where == null ? "" : " WHERE " + where);
+    Integer value = db.jdbc().queryForObject(sql, Map.of(), Integer.class);
+    return value == null ? 0 : value;
+  }
+
+  private String truncate(String value, int max) {
+    if (value == null) return null;
+    return value.length() <= max ? value : value.substring(0, max);
+  }
+}

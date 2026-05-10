@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>绘图 API 后台</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body class="admin-auth-locked">
+    <div class="admin-shell">
+      <aside class="sidebar">
+        <a class="brand" href="/admin" aria-label="绘图 API 后台">
+          <span class="brand-mark">A</span>
+          <span>
+            <strong>DrawAPI-Admin</strong>
+            <small>GPT Image 网关</small>
+          </span>
+        </a>
+
+        <nav class="nav" id="nav" aria-label="后台导航">
+          <span class="nav-label">工作台</span>
+          <button data-view="overview" type="button"><span class="nav-icon">▣</span><span>首页</span><small id="navOverviewCount">-</small></button>
+          <button class="active" data-view="channels" type="button"><span class="nav-icon">◈</span><span>上游渠道</span><small id="navChannelCount">-</small></button>
+          <button data-view="users" type="button"><span class="nav-icon">●</span><span>用户管理</span><small id="navUserCount">-</small></button>
+          <button data-view="jobs" type="button"><span class="nav-icon">☰</span><span>任务管理</span><small id="navJobCount">-</small></button>
+          <span class="nav-label">系统管理</span>
+          <button data-view="codes" type="button"><span class="nav-icon">▤</span><span>兑换码</span><small id="navCodeCount">-</small></button>
+          <button data-view="audit" type="button"><span class="nav-icon">⚑</span><span>审计日志</span><small id="navAuditCount">-</small></button>
+          <button data-view="settings" type="button"><span class="nav-icon">⚙</span><span>站点设置</span><small></small></button>
+          <button data-view="system" type="button"><span class="nav-icon">◎</span><span>运行状态</span><small id="navSystemCount">-</small></button>
+        </nav>
+
+        <div class="side-card">
+          <span>运行状态</span>
+          <strong id="sideHealth">未连接</strong>
+          <small id="sideHealthMeta">等待检查</small>
+        </div>
+
+        <div class="side-footer">
+          <a href="/">工作台</a>
+          <button id="logoutButton" type="button">退出登录</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="breadcrumb">
+            <button class="menu-button" type="button" aria-label="展开菜单">☰</button>
+            <span>工作台</span>
+            <b>/</b>
+            <strong id="viewTitle">上游渠道</strong>
+            <small id="viewSubtitle">服务概览和最近状态</small>
+          </div>
+          <div class="top-actions">
+            <span class="chip" id="redisChip">Redis -</span>
+            <span class="chip" id="gatewayChip">渠道 -</span>
+            <span class="last-refresh" id="lastRefresh">未刷新</span>
+            <span class="identity" id="adminIdentity">未登录</span>
+          </div>
+        </header>
+
+        <div class="tabbar" id="tabbar">
+          <button class="active" id="activeTab" type="button">上游渠道</button>
+          <div class="quick-actions" id="quickActions"></div>
+          <div class="tabbar-actions">
+            <input class="global-search" id="globalSearch" placeholder="搜索当前页面" />
+            <button id="autoRefreshButton" type="button">自动刷新开</button>
+            <button id="refreshButton" type="button">刷新</button>
+          </div>
+        </div>
+
+        <section class="login-panel" id="loginPanel">
+          <form class="login-box" id="loginForm">
+            <div>
+              <h2>管理员登录</h2>
+              <p>登录后进入管理台</p>
+            </div>
+            <label>
+              邮箱
+              <input id="loginEmail" type="email" autocomplete="username" required />
+            </label>
+            <label>
+              密码
+              <input id="loginPassword" type="password" autocomplete="current-password" minlength="8" required />
+            </label>
+            <button type="submit" class="primary">登录</button>
+            <p class="form-message" id="loginMessage"></p>
+          </form>
+        </section>
+
+        <section class="content hidden" id="content">
+          <section class="view" data-panel="overview">
+            <div class="metric-grid" id="metricGrid"></div>
+            <div class="ops-grid">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>运营待办</h2>
+                    <p>需要管理员优先处理的事项</p>
+                  </div>
+                  <button data-action="reload" type="button">刷新</button>
+                </div>
+                <div class="ops-list" id="opsChecklist"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>任务结构</h2>
+                    <p>按最近任务状态统计</p>
+                  </div>
+                  <button data-view-jump="jobs" type="button">查看任务</button>
+                </div>
+                <div class="status-grid" id="jobStatusBoard"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>账户资产</h2>
+                    <p>积分、令牌和用户状态</p>
+                  </div>
+                  <button data-view-jump="users" type="button">查看用户</button>
+                </div>
+                <div class="status-grid" id="accountBoard"></div>
+              </section>
+            </div>
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>用量趋势</h2>
+                  <p>最近 14 天绘图任务、成功率和积分消耗</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="usage-layout">
+                <div class="usage-chart" id="usageChart"></div>
+                <div class="usage-side">
+                  <div id="usageModelList"></div>
+                  <div id="usageGatewayList"></div>
+                </div>
+              </div>
+            </section>
+            <div class="split">
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>渠道状态</h2>
+                    <p>按调用优先级排序</p>
+                  </div>
+                  <button data-view-jump="channels" type="button">管理渠道</button>
+                </div>
+                <div class="compact-list" id="overviewGateways"></div>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>最近任务</h2>
+                    <p>最近提交的绘图任务</p>
+                  </div>
+                  <button data-view-jump="jobs" type="button">查看任务</button>
+                </div>
+                <div class="compact-list" id="overviewJobs"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="view active" data-panel="channels">
+            <section class="channel-hero">
+              <div class="channel-hero-copy">
+                <span class="channel-kicker">Gateway Console</span>
+                <h2>上游渠道编排台</h2>
+                <p>把中转站、官方入口和备用链路统一纳入一张运营控制台，快速筛选、巡检和调度。</p>
+              </div>
+              <div class="channel-hero-actions">
+                <button id="checkAllGateways" type="button" class="channel-pill-action">检测全部渠道</button>
+                <button data-action="reload" type="button" class="channel-pill-secondary">刷新数据</button>
+              </div>
+            </section>
+
+            <section class="channel-command panel">
+              <div class="channel-command-shell">
+                <div class="channel-command-toolbar">
+                  <div class="channel-search">
+                    <span class="channel-search-icon">⌕</span>
+                    <input id="gatewaySearch" placeholder="搜索渠道、中转站、模型、Base URL" />
+                  </div>
+                  <select id="gatewayStatusFilter">
+                    <option value="">全部状态</option>
+                    <option value="enabled">启用</option>
+                    <option value="disabled">停用</option>
+                  </select>
+                  <select id="gatewayProviderFilter">
+                    <option value="">全部类型</option>
+                    <option value="openai">OpenAI 兼容</option>
+                  </select>
+                </div>
+
+                <div class="section-stats channel-stats" id="gatewayStats"></div>
+
+                <div class="channel-note-row">
+                  <span class="channel-note-badge">调度说明</span>
+                  <span id="gatewayHealthNote">健康检查会请求上游 `/models`，并更新延迟、错误和冷却状态</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="channel-create panel" id="gatewayCreateBox" open>
+              <div class="channel-create-head">
+                <div>
+                  <span class="channel-panel-eyebrow">Add Upstream</span>
+                  <h3>新增渠道 / 中转站</h3>
+                  <p>每个渠道代表一个上游入口或中转站，包含模型、真实 API Key、优先级和成本配置。</p>
+                </div>
+                <div class="channel-create-tip">API Key 填 sk-...，Base URL 填 https://...</div>
+              </div>
+              <form class="form-grid channel-form-grid" id="gatewayForm">
+                <label>名称<input name="name" placeholder="例如：new-api 主入口" required /></label>
+                <label>类型<select name="provider"><option value="openai">OpenAI 兼容</option></select></label>
+                <label>Base URL<input name="baseUrl" value="https://api.openai.com/v1" placeholder="例如：https://api.chatgpt-code.com" /></label>
+                  <label>API Key<input name="apiKey" type="password" placeholder="直接填写渠道的真实 API Key" /></label>
+                <label>测试路径<input name="healthCheckPath" value="/models" placeholder="/pg/chat/completions" /></label>
+                <label>生成路径<input name="generationPath" value="/images/generations" placeholder="/pg/images/generations" /></label>
+                <label>分组<input name="upstreamGroup" placeholder="GPT-Image-2-2k" /></label>
+                <label>模型<input name="model" value="gpt-image-2" placeholder="例如：gpt-image-1" /></label>
+                <label>单次积分<input name="costCredits" type="number" value="8" min="0" /></label>
+                <label>超时 ms<input name="timeoutMs" type="number" value="90000" min="1000" /></label>
+                <label>优先级<input name="priority" type="number" value="10" /></label>
+                <label>状态<select name="enabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+                <button type="submit" class="primary">创建渠道</button>
+              </form>
+              <p class="form-message channel-form-message">这里直接填写渠道的真实 API Key；系统会在服务端加密保存，不会在列表中明文回显。</p>
+            </section>
+
+            <section class="channel-list panel">
+              <div class="channel-list-head">
+                <div>
+                  <span class="channel-panel-eyebrow">Live Inventory</span>
+                  <h3>渠道清单</h3>
+                </div>
+                <div class="channel-list-actions">
+                  <div class="bulk-bar hidden" id="gatewayBulkBar">
+                    <strong id="gatewaySelectedCount">已选择 0 个渠道</strong>
+                    <button data-bulk="gateway-enable" type="button">启用</button>
+                    <button data-bulk="gateway-disable" type="button">停用</button>
+                    <button data-bulk="gateway-delete" type="button">删除</button>
+                    <button data-bulk="gateway-clear" type="button">取消选择</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="table-wrap channel-table-wrap">
+                <table class="data-table gateway-table channel-table">
+                  <thead>
+                    <tr>
+                      <th class="select-col"><input id="gatewaySelectAll" type="checkbox" aria-label="选择全部渠道" /></th>
+                      <th>渠道</th>
+                      <th>模型与地址</th>
+                      <th>计费</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="gatewayRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="users">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>用户</h2>
+                  <p>账号状态与积分余额</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="section-stats" id="userStats"></div>
+              <div class="toolbar">
+                <input id="userSearch" placeholder="搜索邮箱、昵称、ID" />
+              </div>
+              <details class="create-box" id="userCreateBox">
+                <summary>创建用户</summary>
+                <form class="form-grid user-create-grid" id="userForm">
+                  <label>邮箱<input name="email" type="email" placeholder="customer@example.com" required /></label>
+                  <label>昵称<input name="name" placeholder="客户名称" /></label>
+                  <label>初始密码<input name="password" type="password" minlength="8" placeholder="至少 8 位" required /></label>
+                  <label>初始积分<input name="credits" type="number" value="0" min="0" /></label>
+                  <button type="submit" class="primary">创建</button>
+                </form>
+              </details>
+              <div class="bulk-bar hidden" id="userBulkBar">
+                <strong id="userSelectedCount">已选择 0 个用户</strong>
+                <input id="bulkCreditAmount" type="number" placeholder="批量积分，例如 100" />
+                <input id="bulkCreditReason" placeholder="原因，例如 活动补发" />
+                <button data-bulk="user-credit" type="button">批量调额</button>
+                <button data-bulk="user-clear" type="button">取消选择</button>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th class="select-col"><input id="userSelectAll" type="checkbox" aria-label="选择全部用户" /></th><th>用户</th><th>积分</th><th>操作</th></tr></thead>
+                  <tbody id="userRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="jobs">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>任务</h2>
+                  <p>最近 100 条绘图请求</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="section-stats" id="jobStats"></div>
+              <div class="toolbar">
+                <input id="jobSearch" placeholder="搜索用户、模型、提示词、ID" />
+                <select id="jobStatusFilter"><option value="">全部状态</option><option value="queued">queued</option><option value="running">running</option><option value="succeeded">succeeded</option><option value="failed">failed</option></select>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>任务</th><th>用户</th><th>模型</th><th>状态</th><th>积分</th><th>提示词</th><th>时间</th><th>操作</th></tr></thead>
+                  <tbody id="jobRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="codes">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>兑换码</h2>
+                  <p>积分兑换和活动发放</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="section-stats" id="codeStats"></div>
+              <div class="toolbar">
+                <input id="codeSearch" placeholder="搜索兑换码" />
+                <select id="codeStatusFilter"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">停用</option></select>
+              </div>
+              <details class="create-box" id="codeCreateBox">
+                <summary>创建兑换码</summary>
+                <form class="form-grid" id="codeForm">
+                  <label>兑换码<input name="code" placeholder="SPRING100" /></label>
+                  <label>活动标识<input name="activityKey" placeholder="MAY2026" /></label>
+                  <label>积分<input name="credits" type="number" value="100" min="1" /></label>
+                  <label>使用上限<input name="maxUses" type="number" value="1" min="1" /></label>
+                  <label>过期时间<input name="expiresAt" type="datetime-local" /></label>
+                  <button type="submit" class="primary">创建</button>
+                </form>
+              </details>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>兑换码</th><th>活动</th><th>积分</th><th>使用</th><th>过期</th><th>状态</th><th>操作</th></tr></thead>
+                  <tbody id="codeRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="audit">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>审计</h2>
+                  <p>最近 100 条操作记录</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="section-stats" id="auditStats"></div>
+              <div class="toolbar">
+                <input id="auditSearch" placeholder="搜索操作者、动作、目标" />
+              </div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>目标</th><th>元数据</th></tr></thead>
+                  <tbody id="auditRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="settings">
+            <section class="panel">
+              <div class="panel-head">
+                <div><h2>站点设置</h2><p>前台展示与跳转配置</p></div>
+              </div>
+              <form id="siteSettingsForm" class="settings-form">
+                <label>
+                  <span>购买积分跳转链接</span>
+                  <input id="buyCreditsUrl" name="buy_credits_url" type="url" placeholder="https://example.com/buy" style="width:100%;max-width:480px" />
+                </label>
+                <p class="form-hint">填写后，用户工作台积分旁会显示"购买积分"按钮并跳转到此链接。留空则不显示。</p>
+                <button type="submit">保存</button>
+              </form>
+            </section>
+          </section>
+
+          <section class="view" data-panel="system">
+            <div class="section-stats system-stats" id="systemCards"></div>
+            <div class="split">
+              <section class="panel">
+                <div class="panel-head">
+                  <div><h2>运行状态</h2><p>/api/ready</p></div>
+                  <button id="reloadSystem" type="button">刷新</button>
+                </div>
+                <pre id="readyJson"></pre>
+              </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div><h2>指标</h2><p>/api/metrics</p></div>
+                  <a href="/api/openapi.json" target="_blank" rel="noreferrer">OpenAPI</a>
+                </div>
+                <pre id="metricsText"></pre>
+              </section>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+    <div class="drawer-scrim hidden" id="drawerScrim"></div>
+    <aside class="detail-drawer hidden" id="detailDrawer" aria-hidden="true">
+      <div class="drawer-head">
+        <div>
+          <h2 id="drawerTitle">详情</h2>
+          <p id="drawerSubtitle"></p>
+        </div>
+        <button id="closeDrawer" type="button">关闭</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+    <div class="toast-stack" id="toastStack"></div>
+    <script src="/admin.js"></script>
+  </body>
+</html>

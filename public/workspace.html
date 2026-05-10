@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPTNet Image - 影像工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+          </div>
+          <div>
+            <h1>GPTNet Image</h1>
+            <p>chatgptnet.com</p>
+          </div>
+        </div>
+
+        <nav class="switcher" aria-label="工作区切换">
+          <button class="active" id="workspaceTab" type="button">创作</button>
+          <button id="historyTab" type="button">历史</button>
+        </nav>
+
+        <div class="status-row">
+          <div class="status-card">
+            <span>账号</span>
+            <strong id="accountName">未登录</strong>
+          </div>
+          <div class="status-card">
+            <span>积分</span>
+            <strong class="credit-balance"><span class="credit-star" aria-hidden="true"></span><span id="creditBalance">0</span></strong>
+          </div>
+          <a class="top-action buy-credits-btn hidden" id="buyCreditsBtn" target="_blank" rel="noreferrer">购买积分</a>
+          <button class="top-action" id="loginButton">登录</button>
+          <button class="top-action hidden" id="logoutButton">退出</button>
+        </div>
+      </header>
+
+      <main class="workspace simplified-workspace">
+        <section class="studio-panel">
+          <form class="creation-layout" id="promptForm">
+            <aside class="primary-composer">
+              <div class="composer-scroll">
+                <div class="composer-title">
+                  <h3>创作设置</h3>
+                  <button class="composer-toggle" id="composerToggle" type="button" aria-expanded="true">收起</button>
+                </div>
+
+                <div class="advanced-config" id="advancedConfig">
+                <div class="model-strip control-section">
+                  <div class="option-stack single-model" id="modelOptions">
+                    <button class="model-option active primary-model" data-model="gpt-image-2" data-subtitle="gpt-image-2" type="button">
+                      <span class="picture-icon"></span>
+                      <span>
+                        <strong>GPT Image 2</strong>
+                        <small>高质量商业图像生成 · 官方主模型</small>
+                      </span>
+                      <em><span class="credit-star" aria-hidden="true"></span>8 积分</em>
+                    </button>
+                  </div>
+                </div>
+
+                <div class="composer-controls">
+                  <div class="compact-control">
+                    <span class="control-label">比例</span>
+                    <div class="ratio-grid" id="ratioOptions">
+                      <button class="tile active" data-value="Auto" type="button"><span class="ratio auto"></span><strong>Auto</strong></button>
+                      <button class="tile" data-value="1:1" type="button"><span class="ratio square"></span><strong>1:1</strong></button>
+                      <button class="tile" data-value="9:16" type="button"><span class="ratio portrait"></span><strong>9:16</strong></button>
+                      <button class="tile" data-value="16:9" type="button"><span class="ratio landscape"></span><strong>16:9</strong></button>
+                    </div>
+                  </div>
+
+                  <div class="compact-control">
+                    <span class="control-label">画质</span>
+                    <div class="quality-grid" id="qualityOptions">
+                      <button class="quality active" data-value="高清(2k)" type="button"><strong>2k</strong><small>默认</small></button>
+                      <button class="quality" data-value="超清(4k)" type="button"><strong>4k</strong><small>精细</small></button>
+                    </div>
+                  </div>
+                </div>
+                </div>
+              </div>
+
+              <div class="history-panel" id="historyPanel">
+                <div class="history-panel-head">
+                  <span>生成历史</span>
+                  <button id="refreshJobs" type="button">刷新</button>
+                </div>
+                <div class="history-panel-body">
+                  <div class="gateway-list" id="jobList"></div>
+                </div>
+              </div>
+            </aside>
+
+            <button class="composer-rail" id="composerRail" type="button" aria-label="展开创作设置">
+              <span>创作设置</span>
+            </button>
+
+              <div class="canvas-workbench">
+                <div class="canvas-stage" id="canvasStage">
+                  <div class="stage-actions hidden" id="stageActions">
+                    <a class="stage-action" id="stageOpen" href="#" target="_blank" rel="noreferrer">打开结果</a>
+                    <a class="stage-action" id="stageDownload" href="#" download>下载图片</a>
+                    <button class="stage-action primary" id="stageEdit" type="button">继续编辑</button>
+                  </div>
+                  <div class="empty-state" id="emptyState">
+                    <div class="empty-card">
+                      <div class="empty-preview empty-preview-placeholder" aria-hidden="true">
+                        <span class="preview-icon"></span>
+                      </div>
+                      <span>等待生成</span>
+                      <h2>结果预览</h2>
+                      <p>提交任务后，生成结果会显示在这里。</p>
+                    </div>
+                  </div>
+                  <div class="result-card hidden" id="resultCard">
+                    <div class="result-art" id="resultArt"></div>
+                    <div class="result-caption">
+                      <div class="result-copy">
+                        <strong id="resultTitle">生成完成</strong>
+                        <span id="resultPrompt">已根据当前提示词生成预览图。</span>
+                      </div>
+                      <div class="result-actions hidden" id="resultActions">
+                        <p class="expiry-notice hidden" id="expiryNotice">⚠️ 图片链接约 1 小时后失效，请尽快下载保存，逾期平台不负责。</p>
+                        <button class="result-link result-link-primary" id="resultEdit" type="button">继续编辑</button>
+                        <a class="result-link" id="resultOpen" href="#" target="_blank" rel="noreferrer">打开结果</a>
+                        <a class="result-link" id="resultDownload" href="#" download>下载图片</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="canvas-composer">
+	                  <div class="prompt-entry">
+	                    <label for="promptInput">描述画面</label>
+	                    <textarea id="promptInput" maxlength="8000" placeholder="例如：一张品牌活动主视觉，画面干净，高级产品摄影质感，留出标题区域。"></textarea>
+	                    <div class="reference-tray hidden" id="referenceTray" aria-label="本次参考图"></div>
+	                  </div>
+	                  <div class="prompt-actions">
+	                    <div class="prompt-meta">
+	                      <label class="ghost-upload">
+	                        上传参考图
+	                        <input id="imageUpload" type="file" accept="image/*" multiple />
+	                      </label>
+	                      <button type="button" class="ghost-action hidden" id="clearReferences">清空参考图</button>
+	                      <button type="button" class="ghost-action" id="negativeToggle">反向</button>
+	                      <span id="promptCounter">0/1200</span>
+                    </div>
+                    <button type="submit" class="generate-button"><span class="spark"></span>生成图片</button>
+                  </div>
+                </div>
+              </div>
+          </form>
+
+          <div class="runtime-hidden" aria-hidden="true">
+            <span id="briefSpec">自动 · 高清(2k)</span>
+            <span id="briefCost">8 积分</span>
+            <span id="taskModel">gpt-image-2</span>
+            <span id="taskType">图像</span>
+            <span id="taskRatio">自动</span>
+            <span id="taskRefs">0/3</span>
+          </div>
+        </section>
+
+        <aside class="panel right-panel assistant-panel">
+          <section class="suggest-card redeem-card">
+            <div class="suggest-heading account-heading">
+              <div>
+                <span>积分兑换</span>
+                <h2>输入兑换码到账</h2>
+              </div>
+              <button id="refreshAccount" type="button">刷新</button>
+            </div>
+            <p class="redeem-note">输入兑换码后积分会立即到账，可直接用于图像生成。</p>
+            <form class="redeem-form" id="redeemForm">
+              <label class="sr-only" for="redeemCode">兑换码</label>
+              <input id="redeemCode" placeholder="输入兑换码" autocomplete="one-time-code" />
+              <button type="submit">兑换</button>
+            </form>
+          </section>
+
+          <section class="suggest-card history-card" id="historyCard">
+            <div class="suggest-heading">
+              <h2>灵感</h2>
+              <button id="shufflePrompts" type="button">换一换</button>
+            </div>
+            <div class="suggest-list" id="suggestList"></div>
+          </section>
+
+          <section class="suggest-card admin-card hidden" id="adminCard">
+            <div class="suggest-heading">
+              <h2>管理员后台</h2>
+              <button id="loadAdmin" type="button">加载</button>
+            </div>
+            <div class="admin-summary" id="adminSummary"></div>
+            <div class="gateway-list" id="gatewayList"></div>
+          </section>
+        </aside>
+      </main>
+
+      <dialog class="auth-dialog" id="authDialog">
+        <form class="auth-box" id="authForm">
+          <h2>登录平台</h2>
+          <p>请输入真实账号登录。若未创建管理员，可通过环境变量注入首个后台账号。</p>
+          <label>
+            邮箱
+            <input id="authEmail" type="email" autocomplete="username" required />
+          </label>
+          <label>
+            密码
+            <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required />
+          </label>
+          <label>
+            昵称
+            <input id="authName" placeholder="注册时可填写" />
+          </label>
+          <div class="auth-actions">
+            <button type="button" id="closeAuth">取消</button>
+            <button type="button" id="registerButton">注册</button>
+            <button type="submit">登录</button>
+          </div>
+        </form>
+      </dialog>
+
+      <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

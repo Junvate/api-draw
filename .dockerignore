@@ -1,0 +1,14 @@
+node_modules
+dist
+backend
+blogs.lovart.ai
+storage
+data
+.git
+.codex
+.agents
+*.log
+target/*
+!target/gptnet-image-0.1.0.jar
+.env
+.env.*

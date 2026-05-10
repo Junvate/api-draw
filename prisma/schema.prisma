@@ -1,0 +1,331 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserStatus {
+  active
+  disabled
+}
+
+enum ApiKeyStatus {
+  active
+  revoked
+}
+
+enum GatewayProvider {
+  openai
+}
+
+enum GatewayHealth {
+  unknown
+  healthy
+  degraded
+  down
+}
+
+enum ImageTaskStatus {
+  queued
+  processing
+  success
+  failed
+  blocked
+  timeout
+  cancelled
+}
+
+enum WalletEntryReason {
+  seed
+  signup_bonus
+  admin_adjust
+  generation_hold
+  generation_refund
+  generation_settle
+  redeem_code
+  subscription_purchase
+}
+
+enum OrderStatus {
+  pending
+  paid
+  cancelled
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+}
+
+model User {
+  id           String     @id @default(cuid())
+  tenantId     String?
+  email        String     @unique
+  name         String
+  passwordHash String
+  role         UserRole   @default(user)
+  status       UserStatus @default(active)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  tenant        Tenant?       @relation(fields: [tenantId], references: [id])
+  apiKeys       ApiKey[]
+  imageTasks    ImageTask[]
+  walletEntries WalletEntry[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model ApiKey {
+  id         String       @id @default(cuid())
+  userId     String
+  name       String
+  prefix     String
+  keyHash    String       @unique
+  scopes     String[]
+  status     ApiKeyStatus @default(active)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  user       User         @relation(fields: [userId], references: [id])
+  imageTasks ImageTask[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Plan {
+  id         String   @id
+  name       String
+  credits    Int
+  priceCents Int
+  interval   String   @default("month")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  orders        Order[]
+  subscriptions Subscription[]
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  userId      String
+  planId      String
+  amountCents Int
+  currency    String      @default("CNY")
+  status      OrderStatus @default(pending)
+  provider    String      @default("manual")
+  paidAt      DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model Subscription {
+  id               String   @id @default(cuid())
+  userId           String
+  planId           String
+  status           String   @default("active")
+  currentPeriodEnd DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Gateway {
+  id                  String          @id @default(cuid())
+  name                String
+  provider            GatewayProvider @default(openai)
+  baseUrl             String
+  apiKeyEnv           String?
+  apiKeyCiphertext    String?
+  healthCheckPath     String          @default("/models")
+  generationPath      String          @default("/images/generations")
+  upstreamGroup       String?
+  model               String
+  costCredits         Int             @default(1)
+  timeoutMs           Int             @default(90000)
+  enabled             Boolean         @default(false)
+  priority            Int             @default(1)
+  healthStatus        GatewayHealth   @default(unknown)
+  consecutiveFailures Int             @default(0)
+  disabledUntil       DateTime?
+  lastCheckedAt       DateTime?
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  lastLatencyMs       Int?
+  lastError           String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  imageTasks ImageTask[]
+
+  @@index([enabled, priority])
+  @@index([healthStatus])
+}
+
+model ImageTask {
+  id            String          @id @default(cuid())
+  userId        String
+  apiKeyId      String?
+  gatewayId     String?
+  requestId     String?
+  model         String
+  prompt        String          @db.Text
+  negativePrompt String?        @db.Text
+  size          String          @default("1024x1024")
+  quality       String          @default("auto")
+  outputFormat  String          @default("png")
+  background    String          @default("opaque")
+  imageCount    Int             @default(1)
+  status        ImageTaskStatus @default(queued)
+  errorCode     String?
+  errorMessage  String?         @db.Text
+  retryCount    Int             @default(0)
+  maxRetries    Int             @default(2)
+  costCredits   Int             @default(1)
+  latencyMs     Int?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  user       User          @relation(fields: [userId], references: [id])
+  apiKey     ApiKey?       @relation(fields: [apiKeyId], references: [id])
+  gateway    Gateway?      @relation(fields: [gatewayId], references: [id])
+  results    ImageResult[]
+  usage      UsageRecord?
+
+  @@unique([apiKeyId, requestId])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([gatewayId])
+}
+
+model ImageResult {
+  id           String   @id @default(cuid())
+  taskId       String
+  url          String
+  thumbnailUrl String?
+  storageKey   String?
+  width        Int?
+  height       Int?
+  format       String
+  sizeBytes    Int?
+  hash         String?
+  createdAt    DateTime @default(now())
+
+  task ImageTask @relation(fields: [taskId], references: [id])
+
+  @@index([taskId])
+}
+
+model WalletEntry {
+  id        String            @id @default(cuid())
+  userId    String
+  amount    Int
+  reason    WalletEntryReason
+  refId     String?
+  actorId   String?
+  createdAt DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([refId])
+}
+
+model UsageRecord {
+  id           String   @id @default(cuid())
+  userId       String
+  apiKeyId     String?
+  taskId       String   @unique
+  model        String
+  imageCount   Int
+  costCredits  Int
+  latencyMs    Int?
+  status       String
+  createdAt    DateTime @default(now())
+
+  task ImageTask @relation(fields: [taskId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([apiKeyId, createdAt])
+  @@index([status])
+}
+
+model RedemptionCode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  credits   Int
+  maxUses   Int
+  usedBy    String[] @default([])
+  expiresAt DateTime?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  targetId  String?
+  meta      Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([action])
+}
+
+model RateLimitRule {
+  id        String   @id @default(cuid())
+  scope     String
+  subjectId String
+  rpm       Int?
+  daily     Int?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([scope, subjectId])
+}
+
+model ModelConfig {
+  id                  String   @id @default(cuid())
+  model               String   @unique
+  enabled             Boolean  @default(true)
+  defaultSize         String   @default("1024x1024")
+  defaultQuality      String   @default("auto")
+  allowTransparent    Boolean  @default(false)
+  allowHighQuality    Boolean  @default(true)
+  maxImagesPerRequest Int      @default(1)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
