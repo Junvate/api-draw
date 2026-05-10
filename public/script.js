@@ -1119,7 +1119,7 @@ refreshMe().then(async (user) => {
   function reasonLabel(r) { return REASON_LABEL[r] || r; }
   function amountHtml(n) {
     const s = n > 0 ? `+${n}` : String(n);
-    return `<span style="color:${n > 0 ? "var(--green,#38a169)" : "var(--red,#e53e3e)"};font-weight:600">${s}</span>`;
+    return `<span style="color:${n > 0 ? 'var(--green,#38a169)' : 'var(--red,#e53e3e)'};font-weight:600">${s}</span>`;
   }
 
   function renderEntries(entries, append) {
