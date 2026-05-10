@@ -786,10 +786,22 @@ modelOptions.forEach((button) => {
   });
 });
 
+function enforceQualityRatioCompat() {
+  const is4k = state.quality === "超清(4k)";
+  const isSquare = state.ratio === "自动" || state.ratio === "1:1";
+  if (is4k && isSquare) {
+    state.quality = "高清(2k)";
+    const btn = Array.from(qualityOptions).find((b) => b.dataset.value === "高清(2k)");
+    if (btn) setActive(qualityOptions, btn, { animate: false });
+    showToast("4K 仅支持 16:9 / 9:16，已自动切换为 2K", "info");
+  }
+}
+
 ratioOptions.forEach((button) => {
   button.addEventListener("click", () => {
     setActive(ratioOptions, button);
     state.ratio = button.dataset.value === "Auto" ? "自动" : button.dataset.value;
+    enforceQualityRatioCompat();
     updateTask();
     persistWorkspaceState();
   });
@@ -799,6 +811,7 @@ qualityOptions.forEach((button) => {
   button.addEventListener("click", () => {
     setActive(qualityOptions, button);
     state.quality = button.dataset.value;
+    enforceQualityRatioCompat();
     updateTask();
     persistWorkspaceState();
   });
