@@ -37,6 +37,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import com.gptnet.image.service.AdminService;
 import org.springframework.web.bind.annotation.ResponseBody;
 
@@ -185,13 +186,13 @@ public class OperationsController {
   }
 
   @GetMapping("/api/images/{taskId}/result")
-  public ResponseEntity<?> result(@PathVariable String taskId) {
-    return serveImageResult(taskId, false);
+  public ResponseEntity<?> result(@PathVariable String taskId, @RequestParam(name = "i", required = false) Integer variantIndex) {
+    return serveImageResult(taskId, false, variantIndex);
   }
 
   @GetMapping("/api/images/{taskId}/download")
-  public ResponseEntity<?> download(@PathVariable String taskId) {
-    return serveImageResult(taskId, true);
+  public ResponseEntity<?> download(@PathVariable String taskId, @RequestParam(name = "i", required = false) Integer variantIndex) {
+    return serveImageResult(taskId, true, variantIndex);
   }
 
   @GetMapping("/api/plans")
@@ -283,19 +284,22 @@ public class OperationsController {
     return Maps.of("credits", db.walletBalance(user.id()), "added", record.credits());
   }
 
-  private ResponseEntity<?> serveImageResult(String taskId, boolean attachment) {
+  private ResponseEntity<?> serveImageResult(String taskId, boolean attachment, Integer variantIndex) {
     ImageTask task = db.imageTaskById(taskId).map(db::hydrateTask).orElse(null);
-    ImageResult result = task == null || task.results().isEmpty() ? null : task.results().get(0);
-    if (result == null) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not found");
+    if (task == null || task.results().isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not found");
+    int index = variantIndex == null ? 0 : Math.max(0, variantIndex);
+    if (index >= task.results().size()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not found");
+    ImageResult result = task.results().get(index);
+    Integer filenameVariant = task.results().size() > 1 ? index + 1 : null;
     if ((result.storageKey() == null || result.storageKey().isBlank()) && result.url() != null && result.url().matches("(?i)^https?://.*")) {
-      return proxyRemoteImage(result.url(), result.format(), attachment ? downloadFilename(task.prompt(), result.format()) : null);
+      return proxyRemoteImage(result.url(), result.format(), attachment ? downloadFilename(task.prompt(), result.format(), filenameVariant) : null);
     }
     if (result.storageKey() == null || result.storageKey().isBlank()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not found");
     Path file = Path.of(storageRoot, result.storageKey());
     if (!Files.isRegularFile(file)) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Not found");
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(mediaType(result.format()));
-    if (attachment) headers.setContentDisposition(contentDisposition(downloadFilename(task.prompt(), result.format())));
+    if (attachment) headers.setContentDisposition(contentDisposition(downloadFilename(task.prompt(), result.format(), filenameVariant)));
     return new ResponseEntity<>(new FileSystemResource(file), headers, HttpStatus.OK);
   }
 
@@ -321,6 +325,10 @@ public class OperationsController {
   }
 
   private String downloadFilename(String prompt, String format) {
+    return downloadFilename(prompt, format, null);
+  }
+
+  private String downloadFilename(String prompt, String format, Integer variantIndex) {
     String safeFormat = List.of("png", "jpeg", "jpg", "webp").contains(format) ? format : "png";
     String stem = Normalizer.normalize(Optional.ofNullable(prompt).orElse(""), Normalizer.Form.NFKC)
       .codePoints()
@@ -329,7 +337,8 @@ public class OperationsController {
       .collect(StringBuilder::new, (builder, code) -> builder.appendCodePoint(code), (left, right) -> left.append(right))
       .toString();
     if (stem.isBlank()) stem = "gpt-image";
-    return stem + "." + ("jpeg".equals(safeFormat) ? "jpg" : safeFormat);
+    String suffix = variantIndex == null ? "" : "-" + variantIndex;
+    return stem + suffix + "." + ("jpeg".equals(safeFormat) ? "jpg" : safeFormat);
   }
 
   private ContentDisposition contentDisposition(String filename) {

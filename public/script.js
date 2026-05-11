@@ -22,6 +22,7 @@ const state = {
   referenceFiles: [],
   activeResultJob: null,
   activeJobId: null,
+  activeImageIndex: 0,
   pollAttempt: 0,
   pollTimer: null,
   notifyOnJobFinish: false,
@@ -63,6 +64,7 @@ const promptInput = $("promptInput");
 const emptyState = $("emptyState");
 const resultCard = $("resultCard");
 const resultArt = $("resultArt");
+const stageThumbs = $("stageThumbs");
 const resultTitle = $("resultTitle");
 const resultPrompt = $("resultPrompt");
 const resultActions = $("resultActions");
@@ -130,6 +132,44 @@ function isTerminalStatus(status) {
 
 function resolveResultUrl(job) {
   return job?.displayUrl || job?.display_url || job?.resultUrl || job?.result_url || job?.images?.[0]?.url || null;
+}
+
+function normalizeResultImages(job) {
+  const rawImages = Array.isArray(job?.images) ? job.images : [];
+  const images = rawImages
+    .map((img, index) => {
+      if (!img) return null;
+      const suffix = index > 0 ? `?i=${index}` : "";
+      const displayUrl = img.display_url || img.displayUrl || (job?.id ? `/api/images/${job.id}/result${suffix}` : null) || img.url || null;
+      const originalUrl = img.url || displayUrl;
+      const downloadUrl = img.download_url || img.downloadUrl || (job?.id ? `/api/images/${job.id}/download${suffix}` : null);
+      const thumbUrl = img.thumbnail_url || img.thumbnailUrl || displayUrl || originalUrl;
+      if (!displayUrl && !originalUrl) return null;
+      return { displayUrl, originalUrl, downloadUrl, thumbUrl };
+    })
+    .filter(Boolean);
+
+  if (!images.length) {
+    const displayUrl = job?.displayUrl || job?.display_url || null;
+    const originalUrl = job?.resultUrl || job?.result_url || displayUrl;
+    if (displayUrl || originalUrl) {
+      images.push({
+        displayUrl: displayUrl || originalUrl,
+        originalUrl,
+        downloadUrl: resolveDownloadUrl(job),
+        thumbUrl: displayUrl || originalUrl,
+      });
+    }
+  }
+
+  return images;
+}
+
+function activeResultImage(job) {
+  const images = normalizeResultImages(job);
+  if (!images.length) return null;
+  const index = Math.min(Math.max(state.activeImageIndex, 0), images.length - 1);
+  return images[index];
 }
 
 function resolveOriginalResultUrl(job) {
@@ -215,7 +255,8 @@ function extensionForImageType(type) {
 }
 
 async function addResultAsReference(job) {
-  const resultUrl = resolveResultUrl(job);
+  const currentImage = activeResultImage(job);
+  const resultUrl = currentImage?.displayUrl || currentImage?.originalUrl || resolveResultUrl(job);
   if (!job || !resultUrl) throw new Error("当前没有可继续编辑的图片");
   const response = await fetch(resultUrl, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw new Error("读取当前图片失败，请先打开结果确认图片可访问");
@@ -446,11 +487,19 @@ function createResultPlaceholder(job) {
 }
 
 function renderResultCard(job, { silent = false } = {}) {
-  const resultUrl = resolveResultUrl(job);
+  const images = normalizeResultImages(job);
+  const imageCount = images.length;
+  const nextJobId = job?.id || null;
+  if (state.activeResultJob?.id !== nextJobId) state.activeImageIndex = 0;
+  if (state.activeImageIndex >= Math.max(1, imageCount)) state.activeImageIndex = 0;
+  const activeIndex = state.activeImageIndex;
+  const activeImage = images[activeIndex] || null;
+
+  const resultUrl = activeImage?.displayUrl || resolveResultUrl(job);
   const displayResultUrl = cacheBustResultUrl(resultUrl, job);
-  const originalUrl = resolveOriginalResultUrl(job);
+  const originalUrl = activeImage?.originalUrl || resolveOriginalResultUrl(job);
+  const downloadUrl = activeImage?.downloadUrl || resolveDownloadUrl(job);
   const canEdit = Boolean(resultUrl && job?.status === "succeeded");
-  const allImages = job?.images?.length > 1 ? job.images.map((i) => i.url).filter(Boolean) : null;
   state.activeResultJob = canEdit ? job : null;
   emptyState.classList.add("hidden");
   resultCard.classList.remove("hidden");
@@ -465,49 +514,73 @@ function renderResultCard(job, { silent = false } = {}) {
     const stageImage = document.createElement("img");
     stageImage.className = "stage-result-image";
     stageImage.src = displayResultUrl;
-    stageImage.alt = "生成结果";
+    stageImage.alt = imageCount > 1 ? `生成结果 ${activeIndex + 1} / ${imageCount}` : "生成结果";
     stageImage.referrerPolicy = "no-referrer";
     canvasStage.appendChild(stageImage);
 
-    if (allImages) {
-      const grid = document.createElement("div");
-      grid.className = "multi-result-grid";
-      allImages.forEach((url, i) => {
-        const img = document.createElement("img");
-        img.src = cacheBustResultUrl(url, job);
-        img.alt = `生成结果 ${i + 1}`;
-        img.referrerPolicy = "no-referrer";
-        img.addEventListener("click", () => window.open(url, "_blank"));
-        grid.appendChild(img);
-      });
-      resultArt.appendChild(grid);
-    } else {
-      const image = document.createElement("img");
-      image.src = displayResultUrl;
-      image.alt = "生成结果";
-      image.referrerPolicy = "no-referrer";
-      image.addEventListener("error", () => {
-        resultArt.replaceChildren(createResultPlaceholder({
-          ...job,
-          status: "failed",
-          error: "图片结果已生成，但浏览器加载图片失败。请点击打开原图查看。",
-        }));
-      }, { once: true });
-      resultArt.appendChild(image);
-      image.addEventListener("load", () => {
-        canvasStage.classList.add("has-loaded-result");
-      }, { once: true });
-    }
+    const image = document.createElement("img");
+    image.src = displayResultUrl;
+    image.alt = imageCount > 1 ? `生成结果 ${activeIndex + 1} / ${imageCount}` : "生成结果";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => {
+      resultArt.replaceChildren(createResultPlaceholder({
+        ...job,
+        status: "failed",
+        error: "图片结果已生成，但浏览器加载图片失败。请点击打开原图查看。",
+      }));
+    }, { once: true });
+    image.addEventListener("load", () => {
+      canvasStage.classList.add("has-loaded-result");
+    }, { once: true });
+    resultArt.appendChild(image);
   } else {
     canvasStage.style.removeProperty("--stage-result-url");
     canvasStage.classList.remove("has-loaded-result");
     resultArt.appendChild(createResultPlaceholder(job || { status: "queued" }));
   }
 
+  renderStageThumbs(job, images, activeIndex);
+
   resultTitle.textContent = formatResultHeadline(job?.status);
   resultPrompt.textContent = formatResultMessage(job);
-  updateResultActions(originalUrl || resultUrl, resolveDownloadUrl(job), Boolean(job?.resultUrl || job?.result_url), canEdit);
+  updateResultActions(originalUrl || resultUrl, downloadUrl, Boolean(job?.resultUrl || job?.result_url || originalUrl), canEdit);
   if (!silent) showToast("预览已更新");
+}
+
+function renderStageThumbs(job, images, activeIndex) {
+  if (!stageThumbs) return;
+  if (!images || images.length <= 1) {
+    canvasStage.classList.remove("has-stage-thumbs");
+    stageThumbs.classList.add("hidden");
+    stageThumbs.replaceChildren();
+    return;
+  }
+  canvasStage.classList.add("has-stage-thumbs");
+  stageThumbs.classList.remove("hidden");
+  stageThumbs.replaceChildren();
+  images.forEach((img, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `stage-thumb${index === activeIndex ? " active" : ""}`;
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", String(index === activeIndex));
+    btn.title = `第 ${index + 1} 张`;
+    const thumbImg = document.createElement("img");
+    thumbImg.src = cacheBustResultUrl(img.thumbUrl || img.displayUrl || img.originalUrl, job);
+    thumbImg.alt = `结果缩略图 ${index + 1}`;
+    thumbImg.referrerPolicy = "no-referrer";
+    btn.appendChild(thumbImg);
+    const label = document.createElement("span");
+    label.className = "stage-thumb-index";
+    label.textContent = String(index + 1);
+    btn.appendChild(label);
+    btn.addEventListener("click", () => {
+      if (state.activeImageIndex === index) return;
+      state.activeImageIndex = index;
+      renderResultCard(job, { silent: true });
+    });
+    stageThumbs.appendChild(btn);
+  });
 }
 
 function resetResultStage() {
@@ -518,9 +591,15 @@ function resetResultStage() {
   canvasStage.querySelector(".stage-result-image")?.remove();
   resultCard.dataset.status = "idle";
   resultArt.replaceChildren();
+  canvasStage.classList.remove("has-stage-thumbs");
+  if (stageThumbs) {
+    stageThumbs.classList.add("hidden");
+    stageThumbs.replaceChildren();
+  }
   resultTitle.textContent = "生成完成";
   resultPrompt.textContent = "已根据当前提示词生成预览图。";
   state.activeResultJob = null;
+  state.activeImageIndex = 0;
   updateResultActions(null);
   emptyState.classList.remove("hidden");
 }
@@ -1294,4 +1373,31 @@ refreshMe().then(async (user) => {
 
   window.creditsViewLoad = creditsViewLoad;
   $("creditsViewLoadMore").addEventListener("click", () => creditsViewLoad(true));
+})();
+
+// ── Panel resizer ──
+(function () {
+  const resizer = $("panelResizer");
+  const bottomPanels = resizer?.nextElementSibling;
+  if (!resizer || !bottomPanels) return;
+  let startY, startH;
+  resizer.addEventListener("mousedown", (e) => {
+    startY = e.clientY;
+    startH = bottomPanels.offsetHeight;
+    resizer.classList.add("dragging");
+    const onMove = (e) => {
+      const delta = startY - e.clientY;
+      const composer = resizer.closest(".primary-composer");
+      const max = composer ? composer.offsetHeight - 60 : window.innerHeight * 0.8;
+      bottomPanels.style.height = Math.min(max, Math.max(80, startH + delta)) + "px";
+    };
+    const onUp = () => {
+      resizer.classList.remove("dragging");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    e.preventDefault();
+  });
 })();

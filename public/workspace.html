@@ -93,6 +93,7 @@
                 </div>
               </div>
 
+              <div class="panel-resizer" id="panelResizer"></div>
               <div class="bottom-panels">
                 <div class="history-panel" id="historyPanel">
                   <div class="history-panel-head">
@@ -117,6 +118,7 @@
                     <a class="stage-action" id="stageDownload" href="#" download>下载图片</a>
                     <button class="stage-action primary" id="stageEdit" type="button">继续编辑</button>
                   </div>
+                  <div class="stage-thumbs hidden" id="stageThumbs" role="tablist" aria-label="生成结果分页"></div>
                   <div class="empty-state" id="emptyState">
                     <div class="empty-card">
                       <div class="empty-preview empty-preview-placeholder" aria-hidden="true">
@@ -128,7 +130,9 @@
                     </div>
                   </div>
                   <div class="result-card hidden" id="resultCard">
-                    <div class="result-art" id="resultArt"></div>
+                    <div class="result-main">
+                      <div class="result-art" id="resultArt"></div>
+                    </div>
                     <div class="result-caption">
                       <div class="result-copy">
                         <strong id="resultTitle">生成完成</strong>

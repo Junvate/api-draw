@@ -45,6 +45,13 @@ export class CreateImageDto {
   refs?: number;
 
   @IsOptional()
+  @Transform(({ value }) => value === undefined || value === "" ? undefined : Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(4)
+  count?: number;
+
+  @IsOptional()
   @IsIn(["sync", "async"])
   response_mode?: "sync" | "async";
 }

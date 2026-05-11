@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Inject, NotImplementedException, Param, Post, Req, Res, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Inject, NotImplementedException, Param, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -119,22 +119,24 @@ export class OperationsController {
 
   @UseGuards(SessionGuard)
   @Get("api/images/:taskId/result")
-  async result(@Req() req: AuthedRequest, @Param("taskId") taskId: string, @Res() res: Response) {
-    return this.serveImageResult(taskId, req.user!.id, res, false);
+  async result(@Req() req: AuthedRequest, @Param("taskId") taskId: string, @Query("i") indexParam: string | undefined, @Res() res: Response) {
+    return this.serveImageResult(taskId, req.user!.id, res, false, indexParam);
   }
 
   @UseGuards(SessionGuard)
   @Get("api/images/:taskId/download")
-  async download(@Req() req: AuthedRequest, @Param("taskId") taskId: string, @Res() res: Response) {
-    return this.serveImageResult(taskId, req.user!.id, res, true);
+  async download(@Req() req: AuthedRequest, @Param("taskId") taskId: string, @Query("i") indexParam: string | undefined, @Res() res: Response) {
+    return this.serveImageResult(taskId, req.user!.id, res, true, indexParam);
   }
 
-  private async serveImageResult(taskId: string, userId: string, res: Response, attachment: boolean) {
-    const task = await this.prisma.imageTask.findUnique({ where: { id: taskId }, include: { results: true } });
+  private async serveImageResult(taskId: string, userId: string, res: Response, attachment: boolean, indexParam?: string) {
+    const task = await this.prisma.imageTask.findUnique({ where: { id: taskId }, include: { results: { orderBy: { createdAt: "asc" } } } });
     if (!task || task.userId !== userId) return res.status(404).send("Not found");
-    const result = task.results[0];
+    const parsedIndex = Number.parseInt(String(indexParam ?? "0"), 10);
+    const index = Number.isFinite(parsedIndex) && parsedIndex >= 0 && parsedIndex < task.results.length ? parsedIndex : 0;
+    const result = task.results[index];
     if (!result) return res.status(404).send("Not found");
-    const filename = this.downloadFilename(task?.prompt || taskId, result.format || "png");
+    const filename = this.downloadFilename(task?.prompt || taskId, result.format || "png", task.results.length > 1 ? index + 1 : undefined);
     if (attachment) res.setHeader("Content-Disposition", this.contentDisposition(filename));
     if (!result.storageKey && /^https?:\/\//i.test(result.url)) return this.proxyRemoteImage(result.url, result.format || "png", res);
     if (!result.storageKey) return res.status(404).send("Not found");
@@ -143,13 +145,14 @@ export class OperationsController {
     return res.type(result.format || "png").sendFile(filePath);
   }
 
-  private downloadFilename(prompt: string, format: string) {
+  private downloadFilename(prompt: string, format: string, variantIndex?: number) {
     const safeFormat = ["png", "jpeg", "jpg", "webp"].includes(format) ? format : "png";
     const stem = Array.from(String(prompt || "").normalize("NFKC"))
       .filter((char) => /[\p{L}\p{N}_-]/u.test(char))
       .slice(0, 16)
       .join("") || "gpt-image";
-    return `${stem}.${safeFormat === "jpeg" ? "jpg" : safeFormat}`;
+    const suffix = variantIndex ? `-${variantIndex}` : "";
+    return `${stem}${suffix}.${safeFormat === "jpeg" ? "jpg" : safeFormat}`;
   }
 
   private contentDisposition(filename: string) {

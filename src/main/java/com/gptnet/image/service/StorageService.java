@@ -55,8 +55,14 @@ public class StorageService {
   }
 
   public StoredObject putImage(String taskId, String extension, byte[] bytes, String contentType) throws IOException {
+    return putImage(taskId, 0, extension, bytes, contentType);
+  }
+
+  public StoredObject putImage(String taskId, int variantIndex, String extension, byte[] bytes, String contentType) throws IOException {
     String safeExtension = extension == null || extension.isBlank() ? "png" : extension.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
-    String storageKey = "images/" + taskId + "." + safeExtension;
+    // Variant 0 keeps the legacy <taskId>.<ext> name so existing tasks stay resolvable; additional variants use <taskId>-<n>.<ext>.
+    String baseName = variantIndex <= 0 ? taskId : taskId + "-" + (variantIndex + 1);
+    String storageKey = "images/" + baseName + "." + safeExtension;
     if ("s3".equals(provider) || "r2".equals(provider) || "oss".equals(provider)) {
       String hash = sha256(bytes);
       putS3(storageKey, bytes, contentType, hash);
@@ -66,10 +72,11 @@ public class StorageService {
     if (!"local".equals(provider)) throw new StorageException("Unsupported STORAGE_PROVIDER=" + provider);
     Path dir = Path.of(localRoot, "images");
     Files.createDirectories(dir);
-    String filename = taskId + "." + safeExtension;
+    String filename = baseName + "." + safeExtension;
     Path file = dir.resolve(filename);
     Files.write(file, bytes);
-    String url = publicBaseUrl.isBlank() ? "/api/images/" + taskId + "/result" : publicBaseUrl + "/" + storageKey;
+    String suffix = variantIndex <= 0 ? "" : "?i=" + variantIndex;
+    String url = publicBaseUrl.isBlank() ? "/api/images/" + taskId + "/result" + suffix : publicBaseUrl + "/" + storageKey;
     return new StoredObject(storageKey, url, bytes.length, sha256(bytes), contentType);
   }
 

@@ -67,7 +67,7 @@ export class ImageService {
         defaultQuality: "auto",
         allowTransparent: true,
         allowHighQuality: true,
-        maxImagesPerRequest: 1,
+        maxImagesPerRequest: 4,
       },
     });
   }
@@ -80,14 +80,23 @@ export class ImageService {
     const requestedQuality = this.cleanFormString(params.dto.quality);
     const normalizedSize = this.normalizeSize(this.cleanFormString(params.dto.size || params.dto.ratio), requestedQuality);
     const gateway = await this.selectGateway(requestedModel, normalizedSize);
-    const cost = normalizedSize === "3840x2160" ? 8 : normalizedSize === "2048x2048" ? 6 : (gateway.costCredits || 1);
+    const unitCost = normalizedSize === "3840x2160" ? 8 : normalizedSize === "2048x2048" ? 6 : (gateway.costCredits || 1);
+
+    // Clamp count to [1, 4] and to model's maxImagesPerRequest if configured lower.
+    const rawCount = Number.isFinite(Number(params.dto.count)) ? Number(params.dto.count) : 1;
+    let imageCount = Math.max(1, Math.min(4, Math.trunc(rawCount) || 1));
+    const modelConfig = await this.prisma.modelConfig.findUnique({ where: { model: gateway.model } }).catch(() => null);
+    const maxPerRequest = modelConfig?.maxImagesPerRequest ?? 4;
+    if (maxPerRequest > 0 && imageCount > maxPerRequest) imageCount = maxPerRequest;
+
+    const totalCost = unitCost * imageCount;
     const referenceFiles = this.validateReferenceFiles(params.referenceFiles || []);
 
     const task = await this.prisma.$transaction(async (tx) => {
       // Balance check inside transaction to prevent concurrent overspend
       const balanceResult = await tx.walletEntry.aggregate({ where: { userId: params.userId }, _sum: { amount: true } });
       const balance = balanceResult._sum.amount || 0;
-      if (balance < cost) throw new BadRequestException({ error: "INSUFFICIENT_CREDITS", message: "积分不足" });
+      if (balance < totalCost) throw new BadRequestException({ error: "INSUFFICIENT_CREDITS", message: "积分不足" });
 
       const task = await tx.imageTask.create({
         data: {
@@ -101,15 +110,15 @@ export class ImageService {
           quality: this.normalizeQuality(requestedQuality),
           outputFormat: this.cleanFormString(params.dto.output_format || "png") || "png",
           background: this.cleanFormString(params.dto.background || "opaque") || "opaque",
-          imageCount: 1,
-          costCredits: cost,
+          imageCount,
+          costCredits: totalCost,
           status: "queued",
         },
       });
       await tx.walletEntry.create({
         data: {
           userId: params.userId,
-          amount: -cost,
+          amount: -totalCost,
           reason: "generation_hold",
           refId: task.id,
           actorId: params.userId,
@@ -164,27 +173,44 @@ export class ImageService {
     if (claimed.count === 0) return task; // already claimed by another worker
 
     try {
-      const result = await this.callGateway(task, task.gateway);
+      const results = await this.callGateway(task, task.gateway);
       const latencyMs = Date.now() - started;
+      const returnedCount = results.length;
+      const shortfall = Math.max(0, task.imageCount - returnedCount);
+      const unitCost = task.imageCount > 0 ? task.costCredits / task.imageCount : task.costCredits;
+      const refundAmount = shortfall > 0 ? Math.round(unitCost * shortfall) : 0;
+      const finalCost = task.costCredits - refundAmount;
+
       const updated = await this.prisma.$transaction(async (tx) => {
-        await tx.imageResult.create({
-          data: {
+        await tx.imageResult.createMany({
+          data: results.map((r) => ({
             taskId: task.id,
-            url: result.url,
-            format: result.format,
-            width: result.width,
-            height: result.height,
-            storageKey: result.storageKey,
-          },
+            url: r.url,
+            format: r.format,
+            width: r.width ?? undefined,
+            height: r.height ?? undefined,
+            storageKey: r.storageKey ?? undefined,
+          })),
         });
+        if (refundAmount > 0) {
+          await tx.walletEntry.create({
+            data: {
+              userId: task.userId,
+              amount: refundAmount,
+              reason: "generation_partial_refund",
+              refId: task.id,
+              actorId: task.userId,
+            },
+          });
+        }
         await tx.usageRecord.create({
           data: {
             userId: task.userId,
             apiKeyId: task.apiKeyId,
             taskId: task.id,
             model: task.model,
-            imageCount: task.imageCount,
-            costCredits: task.costCredits,
+            imageCount: returnedCount,
+            costCredits: finalCost,
             latencyMs,
             status: "success",
           },
@@ -203,7 +229,7 @@ export class ImageService {
         });
         return tx.imageTask.update({
           where: { id: task.id },
-          data: { status: "success", latencyMs, finishedAt: new Date() },
+          data: { status: "success", latencyMs, finishedAt: new Date(), costCredits: finalCost },
           include: { results: true },
         });
       });
@@ -279,6 +305,20 @@ export class ImageService {
   }
 
   async publicTask(task: ImageTask & { results?: Array<{ url: string }> }, userId: string) {
+    const resultsList = task.results || [];
+    const returnedCount = resultsList.length;
+    const imageUrls = resultsList.map((item, index) => {
+      // If stored via our backend, prefer the indexed display URL so clients can download specific variants.
+      const displayUrl = `/api/images/${task.id}/result${index === 0 ? "" : `?i=${index}`}`;
+      const downloadUrl = `/api/images/${task.id}/download${index === 0 ? "" : `?i=${index}`}`;
+      return {
+        url: item.url,
+        display_url: displayUrl,
+        displayUrl,
+        download_url: downloadUrl,
+        downloadUrl,
+      };
+    });
     return {
       object: "image_generation",
       id: task.id,
@@ -289,13 +329,17 @@ export class ImageService {
       size: task.size,
       quality: task.quality,
       prompt: task.prompt,
-      result_url: task.results?.[0]?.url || null,
-      resultUrl: task.results?.[0]?.url || null,
-      display_url: task.results?.[0] ? `/api/images/${task.id}/result` : null,
-      displayUrl: task.results?.[0] ? `/api/images/${task.id}/result` : null,
-      download_url: task.results?.[0] ? `/api/images/${task.id}/download` : null,
-      downloadUrl: task.results?.[0] ? `/api/images/${task.id}/download` : null,
-      images: (task.results || []).map((item) => ({ url: item.url })),
+      result_url: resultsList[0]?.url || null,
+      resultUrl: resultsList[0]?.url || null,
+      display_url: returnedCount ? `/api/images/${task.id}/result` : null,
+      displayUrl: returnedCount ? `/api/images/${task.id}/result` : null,
+      download_url: returnedCount ? `/api/images/${task.id}/download` : null,
+      downloadUrl: returnedCount ? `/api/images/${task.id}/download` : null,
+      images: imageUrls,
+      image_count: task.imageCount,
+      imageCount: task.imageCount,
+      returned_count: returnedCount,
+      returnedCount,
       error: task.errorMessage || null,
       cost_credits: task.costCredits,
       costCredits: task.costCredits,
@@ -323,7 +367,7 @@ export class ImageService {
     return gateway;
   }
 
-  private async callGateway(task: ImageTask, gateway: Gateway) {
+  private async callGateway(task: ImageTask, gateway: Gateway): Promise<GeneratedImage[]> {
     const apiKey = this.resolveGatewayApiKey(gateway);
     if (!apiKey) throw new Error("渠道 API Key 未配置");
     const referenceImages = await this.loadReferenceImages(task.id);
@@ -331,7 +375,7 @@ export class ImageService {
     return this.callGatewayGeneration(task, gateway, apiKey);
   }
 
-  private async callGatewayGeneration(task: ImageTask, gateway: Gateway, apiKey: string) {
+  private async callGatewayGeneration(task: ImageTask, gateway: Gateway, apiKey: string): Promise<GeneratedImage[]> {
     const generationPath = (gateway as any).generationPath || "/images/generations";
     const upstreamGroup = (gateway as any).upstreamGroup || this.groupForSize(task.size);
     const response = await upstreamJsonRequest<{ error?: { message?: string }; data?: Array<{ b64_json?: string; url?: string }> }>(
@@ -354,28 +398,13 @@ export class ImageService {
     );
     const payload = response.payload;
     if (!response.ok) throw new Error(upstreamErrorMessage(payload, `上游返回 HTTP ${response.status}`));
-    const first = payload.data?.[0];
-    if (!first?.b64_json && !first?.url) throw new Error("图像网关没有返回结果");
-    if (first.url) {
-      return {
-        url: first.url,
-        format: task.outputFormat,
-        width: null,
-        height: null,
-        storageKey: null,
-      };
-    }
-    const stored = await this.persistGeneratedImage(task, first.b64_json!, task.outputFormat);
-    return {
-      url: stored.url,
-      format: task.outputFormat,
-      width: null,
-      height: null,
-      storageKey: stored.storageKey,
-    };
+    const entries = Array.isArray(payload.data) ? payload.data : [];
+    const valid = entries.filter((item) => item?.url || item?.b64_json);
+    if (valid.length === 0) throw new Error("图像网关没有返回结果");
+    return this.materializeImages(task, valid);
   }
 
-  private async callGatewayEdit(task: ImageTask, gateway: Gateway, apiKey: string, referenceImages: LoadedReferenceImage[]) {
+  private async callGatewayEdit(task: ImageTask, gateway: Gateway, apiKey: string, referenceImages: LoadedReferenceImage[]): Promise<GeneratedImage[]> {
     const editPath = this.editPathForGateway(gateway);
     const upstreamGroup = (gateway as any).upstreamGroup || this.groupForSize(task.size);
     const parts = [
@@ -384,6 +413,7 @@ export class ImageService {
       { name: "prompt", value: task.prompt },
       { name: "size", value: task.size },
       { name: "response_format", value: "url" },
+      { name: "n", value: String(task.imageCount) },
       ...referenceImages.map((image) => ({
         name: "image",
         value: image.buffer,
@@ -402,25 +432,24 @@ export class ImageService {
     );
     const payload = response.payload;
     if (!response.ok) throw new Error(upstreamErrorMessage(payload, `上游返回 HTTP ${response.status}`));
-    const first = payload.data?.[0];
-    if (!first?.b64_json && !first?.url) throw new Error("图像编辑网关没有返回结果");
-    if (first.url) {
-      return {
-        url: first.url,
-        format: task.outputFormat,
-        width: null,
-        height: null,
-        storageKey: null,
-      };
+    const entries = Array.isArray(payload.data) ? payload.data : [];
+    const valid = entries.filter((item) => item?.url || item?.b64_json);
+    if (valid.length === 0) throw new Error("图像编辑网关没有返回结果");
+    return this.materializeImages(task, valid);
+  }
+
+  private async materializeImages(task: ImageTask, entries: Array<{ b64_json?: string; url?: string }>): Promise<GeneratedImage[]> {
+    const out: GeneratedImage[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const item = entries[i]!;
+      if (item.url) {
+        out.push({ url: item.url, format: task.outputFormat, width: null, height: null, storageKey: null });
+        continue;
+      }
+      const stored = await this.persistGeneratedImage(task, item.b64_json!, task.outputFormat, i);
+      out.push({ url: stored.url, format: task.outputFormat, width: null, height: null, storageKey: stored.storageKey });
     }
-    const stored = await this.persistGeneratedImage(task, first.b64_json!, task.outputFormat);
-    return {
-      url: stored.url,
-      format: task.outputFormat,
-      width: null,
-      height: null,
-      storageKey: stored.storageKey,
-    };
+    return out;
   }
 
   private editPathForGateway(gateway: Gateway) {
@@ -450,16 +479,20 @@ export class ImageService {
     return null;
   }
 
-  private async persistGeneratedImage(task: ImageTask, b64: string, format: string) {
+  private async persistGeneratedImage(task: ImageTask, b64: string, format: string, variantIndex = 0) {
     const safeFormat = ["png", "jpeg", "jpg", "webp"].includes(format) ? format : "png";
     const storageRoot = this.config.get<string>("LOCAL_STORAGE_DIR") || "storage";
     const dir = join(process.cwd(), storageRoot, "images");
-    const filename = `${task.id}.${safeFormat === "jpeg" ? "jpg" : safeFormat}`;
+    const ext = safeFormat === "jpeg" ? "jpg" : safeFormat;
+    // Single-image tasks keep legacy filename (<taskId>.<ext>) so pre-existing files still resolve.
+    // Multi-image tasks use <taskId>-<n>.<ext> where n is 1-based.
+    const filename = variantIndex === 0 ? `${task.id}.${ext}` : `${task.id}-${variantIndex + 1}.${ext}`;
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, filename), Buffer.from(b64, "base64"));
+    const publicUrl = variantIndex === 0 ? `/api/images/${task.id}/result` : `/api/images/${task.id}/result?i=${variantIndex}`;
     return {
       storageKey: `images/${filename}`,
-      url: `/api/images/${task.id}/result`,
+      url: publicUrl,
     };
   }
 
@@ -588,4 +621,12 @@ interface LoadedReferenceImage {
   filename: string;
   contentType: string;
   buffer: Buffer;
+}
+
+interface GeneratedImage {
+  url: string;
+  format: string;
+  width: number | null;
+  height: number | null;
+  storageKey: string | null;
 }
