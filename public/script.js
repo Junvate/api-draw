@@ -265,7 +265,21 @@ function renderReferencePreviews(files) {
     img.title = file.name || "本次参考图";
     const badge = document.createElement("span");
     badge.textContent = `参考图 ${index + 1}`;
-    item.append(img, badge);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "reference-del-btn";
+    del.title = "移除";
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      state.referenceFiles.splice(index, 1);
+      state.previewUrls.forEach((url) => URL.revokeObjectURL(url));
+      state.previewUrls = [];
+      state.refs = state.referenceFiles.length;
+      renderReferencePreviews(state.referenceFiles);
+      updateTask();
+      persistWorkspaceState();
+    });
+    item.append(img, badge, del);
     referenceTray.appendChild(item);
   });
   if (files.length > 0 && files.length < 3) {
