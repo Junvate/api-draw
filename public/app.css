@@ -855,6 +855,24 @@ a { color: inherit; }
   white-space: nowrap;
 }
 
+.reference-add-btn {
+  width: 86px;
+  height: 64px;
+  border: 1.5px dashed var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  align-self: start;
+  transition: border-color 0.15s, color 0.15s;
+}
+.reference-add-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
+
 /* Generate button */
 .generate-button {
   width: 160px;

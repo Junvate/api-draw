@@ -245,6 +245,35 @@ function renderReferencePreviews(files) {
     item.append(img, badge);
     referenceTray.appendChild(item);
   });
+  if (files.length > 0 && files.length < 3) {
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "reference-add-btn";
+    addBtn.title = "继续添加参考图";
+    addBtn.textContent = "+";
+    addBtn.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.multiple = true;
+      input.addEventListener("change", () => {
+        const MAX = 10 * 1024 * 1024;
+        const incoming = Array.from(input.files || []);
+        const oversized = incoming.filter(f => f.size > MAX);
+        if (oversized.length) { showToast(`图片过大（最大 10MB）：${oversized.map(f => f.name).join("、")}`, "error"); return; }
+        const merged = [...state.referenceFiles, ...incoming].slice(0, 3);
+        clearThumbPreviews();
+        state.referenceFiles = merged;
+        state.refs = merged.length;
+        renderReferencePreviews(merged);
+        updateTask();
+        persistWorkspaceState();
+        showToast(`本次生成将参考 ${merged.length} 张图片`);
+      });
+      input.click();
+    });
+    referenceTray.appendChild(addBtn);
+  }
 }
 
 function extensionForImageType(type) {
