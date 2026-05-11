@@ -491,6 +491,10 @@ a { color: inherit; }
   border-radius: 0;
   border: 0;
   border-bottom: 1px solid var(--line-soft);
+  padding: 4px;
+  object-fit: contain;
+  background: #f8fafc;
+  box-sizing: border-box;
 }
 
 .history-panel-body .job-item strong,
@@ -1476,8 +1480,10 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
   height: 54px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  object-fit: cover;
-  background: #fff;
+  padding: 3px;
+  object-fit: contain;
+  background: #f8fafc;
+  box-sizing: border-box;
 }
 
 .admin-summary {
