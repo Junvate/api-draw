@@ -1706,38 +1706,49 @@ button.is-loading { position: relative; cursor: wait; }
 
   .studio-panel { min-height: auto; }
 
-  /* stack composer above canvas on mobile */
-  .creation-layout {
+  /* stack composer above canvas on mobile — override sidebar-collapsed too */
+  .creation-layout,
+  .creation-layout.sidebar-collapsed {
     grid-template-columns: 1fr !important;
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto !important;
     min-height: auto;
   }
 
-  .primary-composer {
+  .primary-composer,
+  .creation-layout.sidebar-collapsed .primary-composer {
+    grid-column: 1 / -1 !important;
+    grid-row: 1 !important;
     width: 100% !important;
     border-right: 0;
+    border-left: 0;
     border-bottom: 1px solid var(--line-soft);
-    overflow: visible;
-    position: static;
-    left: auto;
-    top: auto;
-    height: auto;
-    max-height: none;
+    overflow: visible !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .canvas-workbench,
+  .creation-layout.sidebar-collapsed .canvas-workbench {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
   }
 
   .history-panel { max-height: 220px; }
 
-  .history-panel-body .gateway-list { grid-template-columns: repeat(3, 1fr); }
+  .history-panel-body .gateway-list { grid-template-columns: repeat(2, 1fr); }
 
-  .creation-layout.sidebar-collapsed .primary-composer {
-    width: 100% !important;
-  }
-
+  /* composer settings stay visible on mobile (no rail to expand from) */
   .creation-layout.sidebar-collapsed .advanced-config {
-    display: none;
+    display: block;
   }
 
-  .composer-rail { display: none !important; }
+  .composer-rail,
+  .creation-layout.sidebar-collapsed .composer-rail {
+    display: none !important;
+  }
 
   .canvas-stage { min-height: 300px; }
 
