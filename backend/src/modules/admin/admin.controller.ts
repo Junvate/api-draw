@@ -1,5 +1,5 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Inject, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../core/prisma.service.js";
 import { SecurityService } from "../core/security.service.js";
@@ -13,6 +13,8 @@ import { AdminCreateUserDto, CreditsDto, GatewayDto, PatchGatewayDto, PatchRedem
 @UseGuards(SessionGuard, AdminGuard)
 @Controller("api/admin")
 export class AdminController {
+  private readonly redemptionAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SecurityService) private readonly security: SecurityService,
@@ -24,6 +26,28 @@ export class AdminController {
     if (!normalizedPath) return baseUrl.replace(/\/$/, "");
     if (/^https?:\/\//i.test(normalizedPath)) return normalizedPath;
     return `${baseUrl.replace(/\/$/, "")}/${normalizedPath.replace(/^\//, "")}`;
+  }
+
+  private randomRedemptionCode(length = 16) {
+    let value = "";
+    for (let index = 0; index < length; index += 1) {
+      value += this.redemptionAlphabet[randomInt(0, this.redemptionAlphabet.length)];
+    }
+    return value;
+  }
+
+  private normalizeRedemptionCode(value?: string) {
+    const code = String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    return code || null;
+  }
+
+  private async uniqueRedemptionCode() {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const code = this.randomRedemptionCode();
+      const exists = await this.prisma.redemptionCode.findUnique({ where: { code } });
+      if (!exists) return code;
+    }
+    throw new BadRequestException({ error: "CODE_GENERATION_FAILED", message: "兑换码生成失败，请重试" });
   }
 
   private publicGateway(gateway: any) {
@@ -375,23 +399,32 @@ export class AdminController {
 
   @Post("redemption-codes")
   async createCode(@Req() req: AuthedRequest, @Body() body: RedemptionCodeDto) {
-    const normalizedCode = (body.code || randomUUID().slice(0, 8)).trim().toUpperCase();
-    const exists = await this.prisma.redemptionCode.findUnique({ where: { code: normalizedCode } });
-    if (exists) {
-      throw new ConflictException({ error: "CODE_EXISTS", message: "兑换码已存在，请更换一个新的代码" });
+    const batchCount = Math.max(1, Math.min(500, Number(body.batchCount || 1)));
+    const manualCode = this.normalizeRedemptionCode(body.code);
+    if (batchCount > 1 && manualCode) {
+      throw new BadRequestException({ error: "BATCH_CODE_CONFLICT", message: "批量生成时请留空兑换码，由系统自动生成" });
     }
-    const code = await this.prisma.redemptionCode.create({
-      data: {
-        code: normalizedCode,
-        credits: body.credits ?? 100,
-        maxUses: body.maxUses ?? 1,
-        usedBy: [],
-        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
-        active: true,
-      },
-    });
-    await this.audit(req, "redemption_code.create", code.id, { code: code.code, credits: code.credits, maxUses: code.maxUses });
-    return { code };
+    if (manualCode) {
+      const exists = await this.prisma.redemptionCode.findUnique({ where: { code: manualCode } });
+      if (exists) {
+        throw new ConflictException({ error: "CODE_EXISTS", message: "兑换码已存在，请更换一个新的代码" });
+      }
+    }
+    const codes = [];
+    for (let index = 0; index < batchCount; index += 1) {
+      codes.push(await this.prisma.redemptionCode.create({
+        data: {
+          code: manualCode || await this.uniqueRedemptionCode(),
+          credits: body.credits ?? 100,
+          maxUses: body.maxUses ?? 1,
+          usedBy: [],
+          expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+          active: true,
+        },
+      }));
+    }
+    await this.audit(req, batchCount > 1 ? "redemption_code.batch_create" : "redemption_code.create", codes[0].id, { count: codes.length, codes: codes.map((item) => item.code), credits: codes[0].credits, maxUses: codes[0].maxUses });
+    return { code: codes[0], codes };
   }
 
   @Patch("redemption-codes/:id")

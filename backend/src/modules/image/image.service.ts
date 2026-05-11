@@ -197,7 +197,7 @@ export class ImageService {
             data: {
               userId: task.userId,
               amount: refundAmount,
-              reason: "generation_partial_refund",
+              reason: "generation_refund",
               refId: task.id,
               actorId: task.userId,
             },

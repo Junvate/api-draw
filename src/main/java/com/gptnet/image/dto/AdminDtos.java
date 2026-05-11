@@ -127,6 +127,9 @@ public final class AdminDtos {
     @Min(1)
     @Max(1000000)
     private Integer maxUses;
+    @Min(1)
+    @Max(500)
+    private Integer batchCount;
     private String expiresAt;
     private Boolean active;
 
@@ -138,6 +141,8 @@ public final class AdminDtos {
     public void setCredits(Integer credits) { this.credits = credits; }
     public Integer getMaxUses() { return maxUses; }
     public void setMaxUses(Integer maxUses) { this.maxUses = maxUses; }
+    public Integer getBatchCount() { return batchCount; }
+    public void setBatchCount(Integer batchCount) { this.batchCount = batchCount; }
     public String getExpiresAt() { return expiresAt; }
     public void setExpiresAt(String expiresAt) { this.expiresAt = expiresAt; }
     public Boolean getActive() { return active; }

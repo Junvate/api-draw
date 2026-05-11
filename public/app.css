@@ -771,6 +771,16 @@ a { color: inherit; }
 
 .quality strong { font-size: 13px; font-weight: 700; }
 .quality small  { font-size: 11px; color: inherit; opacity: .7; }
+.count-custom {
+  width: 64px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.count-custom::-webkit-inner-spin-button,
+.count-custom::-webkit-outer-spin-button { -webkit-appearance: none; }
 
 /* Prompt actions bar (bottom of form) */
 .prompt-actions {

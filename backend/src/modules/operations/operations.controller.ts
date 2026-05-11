@@ -224,7 +224,7 @@ export class OperationsController {
   @UseGuards(SessionGuard)
   @Post("api/redeem")
   async redeem(@Req() req: AuthedRequest, @Body() body: { code: string }) {
-    const code = String(body.code || "").trim().toUpperCase();
+    const code = String(body.code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     const now = new Date();
     const added = await this.prisma.$transaction(async (tx) => {
       const record = await tx.redemptionCode.findUniqueOrThrow({ where: { code } });

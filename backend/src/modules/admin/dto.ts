@@ -138,6 +138,13 @@ export class RedemptionCodeDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(500)
+  batchCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   @Max(1000000)
   credits?: number;
 

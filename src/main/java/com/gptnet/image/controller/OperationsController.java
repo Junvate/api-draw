@@ -250,7 +250,7 @@ public class OperationsController {
   @org.springframework.transaction.annotation.Transactional
   public Map<String, Object> redeem(HttpServletRequest request, @RequestBody Map<String, Object> body) {
     User user = auth.validateSession(request);
-    String code = String.valueOf(body.getOrDefault("code", "")).trim().toUpperCase();
+    String code = String.valueOf(body.getOrDefault("code", "")).trim().toUpperCase().replaceAll("[^A-Z0-9]", "");
     if (code.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "兑换码不能为空");
     auth.lockUserWallet(user.id());
     RedemptionCode record = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"code\" = :code FOR UPDATE", Map.of("code", code), db.redemptionCodeMapper())

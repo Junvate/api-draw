@@ -227,6 +227,29 @@ function clearThumbPreviews() {
   persistWorkspaceState();
 }
 
+function appendReferenceFiles(files) {
+  const incoming = Array.from(files || []);
+  const MAX = 10 * 1024 * 1024;
+  const oversized = incoming.filter((file) => file.size > MAX);
+  if (oversized.length) {
+    throw new Error(`图片过大（最大 10MB）：${oversized.map((file) => file.name).join("、")}`);
+  }
+  if (!incoming.length) {
+    imageUpload.value = "";
+    return state.referenceFiles.length;
+  }
+  const merged = [...state.referenceFiles, ...incoming].slice(0, 3);
+  state.previewUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.previewUrls = [];
+  state.referenceFiles = merged;
+  state.refs = merged.length;
+  imageUpload.value = "";
+  renderReferencePreviews(merged);
+  updateTask();
+  persistWorkspaceState();
+  return merged.length;
+}
+
 function renderReferencePreviews(files) {
   referenceTray.replaceChildren();
   referenceTray.classList.toggle("hidden", !files.length);
@@ -257,18 +280,12 @@ function renderReferencePreviews(files) {
       input.accept = "image/*";
       input.multiple = true;
       input.addEventListener("change", () => {
-        const MAX = 10 * 1024 * 1024;
-        const incoming = Array.from(input.files || []);
-        const oversized = incoming.filter(f => f.size > MAX);
-        if (oversized.length) { showToast(`图片过大（最大 10MB）：${oversized.map(f => f.name).join("、")}`, "error"); return; }
-        const merged = [...state.referenceFiles, ...incoming].slice(0, 3);
-        clearThumbPreviews();
-        state.referenceFiles = merged;
-        state.refs = merged.length;
-        renderReferencePreviews(merged);
-        updateTask();
-        persistWorkspaceState();
-        showToast(`本次生成将参考 ${merged.length} 张图片`);
+        try {
+          const count = appendReferenceFiles(input.files);
+          showToast(`本次生成将参考 ${count} 张图片`);
+        } catch (error) {
+          showToast(error.message, "error");
+        }
       });
       input.click();
     });
@@ -1002,10 +1019,21 @@ qualityOptions.forEach((button) => {
 countOptions.forEach((button) => {
   button.addEventListener("click", () => {
     setActive(countOptions, button);
+    $("countCustom").value = "";
     state.count = parseInt(button.dataset.value, 10);
     updateTask();
     persistWorkspaceState();
   });
+});
+
+$("countCustom").addEventListener("input", () => {
+  const v = parseInt($("countCustom").value, 10);
+  if (v >= 1) {
+    countOptions.forEach(b => b.classList.remove("active"));
+    state.count = Math.min(v, 20);
+    updateTask();
+    persistWorkspaceState();
+  }
 });
 
 $("shufflePrompts").addEventListener("click", () => {
@@ -1085,23 +1113,13 @@ promptForm.addEventListener("submit", async (event) => {
 });
 
 imageUpload.addEventListener("change", () => {
-  const MAX = 10 * 1024 * 1024;
-  const all = Array.from(imageUpload.files || []);
-  const oversized = all.filter(f => f.size > MAX);
-  if (oversized.length) {
-    showToast(`图片过大（最大 10MB）：${oversized.map(f => f.name).join("、")}`, "error");
+  try {
+    const count = appendReferenceFiles(imageUpload.files);
+    showToast(count ? `本次生成将参考 ${count} 张图片` : "已清空本次参考图");
+  } catch (error) {
     imageUpload.value = "";
-    return;
+    showToast(error.message, "error");
   }
-  const files = all.slice(0, 3);
-  clearThumbPreviews();
-  state.referenceFiles = files;
-  state.refs = files.length;
-  renderReferencePreviews(files);
-
-  updateTask();
-  persistWorkspaceState();
-  showToast(files.length ? `本次生成将参考 ${files.length} 张图片` : "已清空本次参考图");
 });
 
 clearReferences.addEventListener("click", () => {

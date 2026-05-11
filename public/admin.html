@@ -6,6 +6,7 @@
     <title>绘图 API 后台</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/admin.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   </head>
   <body class="admin-auth-locked">
     <div class="admin-shell">
@@ -127,16 +128,27 @@
             <section class="panel">
               <div class="panel-head">
                 <div>
-                  <h2>用量趋势</h2>
-                  <p>最近 14 天绘图任务、成功率和积分消耗</p>
+                  <h2>调用统计</h2>
+                  <p id="usagePeriodLabel">最近 14 天绘图任务、成功率和积分消耗</p>
                 </div>
-                <button data-action="reload" type="button">刷新</button>
+                <div class="usage-controls">
+                  <div class="usage-days-tabs" id="usageDaysTabs">
+                    <button class="days-tab" data-days="7" type="button">7天</button>
+                    <button class="days-tab active" data-days="14" type="button">14天</button>
+                    <button class="days-tab" data-days="30" type="button">30天</button>
+                    <button class="days-tab" data-days="90" type="button">90天</button>
+                  </div>
+                  <button data-action="reload" type="button">刷新</button>
+                </div>
               </div>
+              <div class="usage-stat-row" id="usageStatRow"></div>
               <div class="usage-layout">
-                <div class="usage-chart" id="usageChart"></div>
+                <div class="usage-chart-wrap">
+                  <canvas id="usageChart"></canvas>
+                </div>
                 <div class="usage-side">
-                  <div id="usageModelList"></div>
-                  <div id="usageGatewayList"></div>
+                  <div class="usage-mini-chart-wrap"><canvas id="usageModelChart"></canvas></div>
+                  <div class="usage-mini-chart-wrap"><canvas id="usageGatewayChart"></canvas></div>
                 </div>
               </div>
             </section>
@@ -341,16 +353,18 @@
               <div class="toolbar">
                 <input id="codeSearch" placeholder="搜索兑换码" />
                 <select id="codeStatusFilter"><option value="">全部状态</option><option value="active">启用</option><option value="disabled">停用</option></select>
+                <button class="ghost-action" id="copyFilteredCodes" type="button">复制当前列表</button>
               </div>
               <details class="create-box" id="codeCreateBox">
-                <summary>创建兑换码</summary>
-                <form class="form-grid" id="codeForm">
-                  <label>兑换码<input name="code" placeholder="SPRING100" /></label>
+                <summary>创建兑换码 <span>留空自动生成 16 位数字字母组合，可一次批量生成</span></summary>
+                <form class="form-grid code-form-grid" id="codeForm">
+                  <label>兑换码<input name="code" placeholder="留空自动生成" autocomplete="off" /></label>
                   <label>活动标识<input name="activityKey" placeholder="MAY2026" /></label>
                   <label>积分<input name="credits" type="number" value="100" min="1" /></label>
                   <label>使用上限<input name="maxUses" type="number" value="1" min="1" /></label>
+                  <label>生成数量<input name="batchCount" type="number" value="1" min="1" max="500" /></label>
                   <label>过期时间<input name="expiresAt" type="datetime-local" /></label>
-                  <button type="submit" class="primary">创建</button>
+                  <button type="submit" class="primary">生成兑换码</button>
                 </form>
               </details>
               <div class="table-wrap">

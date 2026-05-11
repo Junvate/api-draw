@@ -11,6 +11,7 @@ const state = {
   user: null,
   summary: null,
   usage: null,
+  usageDays: 14,
   ready: null,
   users: [],
   gateways: [],
@@ -100,6 +101,7 @@ const quickActions = {
   ],
   codes: [
     ["code-create", "创建兑换码", "open", "codeCreateBox", "primary"],
+    ["code-copy", "复制当前列表", "click", "copyFilteredCodes", "green"],
     ["users", "用户积分", "view", "users"],
     ["audit", "查看审计", "view", "audit"],
   ],
@@ -138,6 +140,26 @@ async function api(path, options = {}) {
 
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
+}
+
+async function copyText(text) {
+  if (!text) throw new Error("没有可复制的内容");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
 }
 
 function isoFromLocal(value) {
@@ -613,7 +635,7 @@ async function loadAll() {
     try {
       const [summary, usage, users, gateways, codes, jobs, logs, ready] = await Promise.all([
         api("/api/admin/summary"),
-        api("/api/admin/usage?days=14"),
+        api("/api/admin/usage?days=" + state.usageDays),
         api("/api/admin/users"),
         api("/api/admin/gateways"),
         api("/api/admin/redemption-codes"),
@@ -734,38 +756,133 @@ function renderOverview() {
   `).join("") || `<div class="compact-item"><span>暂无任务</span></div>`;
 }
 
+let _usageChart = null;
+let _modelChart = null;
+let _gatewayChart = null;
+
+const CHART_PALETTE = ["#63b3ed","#68d391","#f6ad55","#fc8181","#b794f4","#76e4f7","#fbd38d","#9ae6b4","#feb2b2","#e9d8fd"];
+
 function renderUsage() {
   const usage = state.usage || { daily: [], byModel: [], byGateway: [], totals: {} };
-  const maxJobs = Math.max(1, ...usage.daily.map((day) => day.jobs));
-  $("usageChart").innerHTML = usage.daily.map((day) => {
-    const height = Math.max(8, Math.round((day.jobs / maxJobs) * 180));
-    const failed = Number(day.failed || 0) > 0;
-    return `
-      <div class="usage-day ${failed ? "failed" : ""}" title="${escapeHtml(day.date)} · ${day.jobs} 任务 · ${day.credits} 积分">
-        <div class="usage-bar" style="height:${height}px"></div>
-        <small>${escapeHtml(day.date.slice(5))}</small>
-      </div>
-    `;
-  }).join("") || `<div class="empty-row">暂无用量数据</div>`;
+  const totals = usage.totals || {};
 
-  $("usageModelList").innerHTML = `
-    <div class="usage-list">
-      <h3>模型用量</h3>
-      ${(usage.byModel || []).slice(0, 5).map((item) => `
-        <div class="usage-row"><span>${escapeHtml(item.model)}</span><strong>${item.jobs}</strong></div>
-      `).join("") || `<div class="usage-row"><span>暂无数据</span><strong>0</strong></div>`}
-    </div>
-  `;
+  // stat row
+  $("usageStatRow").innerHTML = [
+    ["总任务", totals.jobs ?? 0],
+    ["成功", totals.succeeded ?? 0],
+    ["失败", totals.failed ?? 0],
+    ["成功率", (totals.successRate ?? 0) + "%"],
+    ["积分消耗", totals.credits ?? 0],
+  ].map(([label, val]) => `<div class="usage-stat"><span>${label}</span><strong>${val}</strong></div>`).join("");
 
-  const gatewayNames = new Map(state.gateways.map((gateway) => [gateway.id, gateway.name]));
-  $("usageGatewayList").innerHTML = `
-    <div class="usage-list">
-      <h3>渠道用量</h3>
-      ${(usage.byGateway || []).slice(0, 5).map((item) => `
-        <div class="usage-row"><span>${escapeHtml(gatewayNames.get(item.gatewayId) || item.gatewayId)}</span><strong>${item.jobs}</strong></div>
-      `).join("") || `<div class="usage-row"><span>暂无数据</span><strong>0</strong></div>`}
-    </div>
-  `;
+  $("usagePeriodLabel").textContent = `最近 ${state.usageDays} 天绘图任务、成功率和积分消耗`;
+
+  // ── 图表1：任务趋势（柱状堆叠 + 积分折线）──
+  const labels = usage.daily.map((d) => d.date.slice(5));
+  const jobsData = usage.daily.map((d) => d.jobs);
+  const succeededData = usage.daily.map((d) => d.succeeded);
+  const failedData = usage.daily.map((d) => d.failed);
+  const creditsData = usage.daily.map((d) => d.credits);
+
+  if (_usageChart) { _usageChart.destroy(); _usageChart = null; }
+  const canvas = $("usageChart");
+  if (canvas) {
+    _usageChart = new Chart(canvas, {
+      data: {
+        labels,
+        datasets: [
+          { type: "bar", label: "成功", data: succeededData, yAxisID: "y", backgroundColor: "rgba(99,179,237,0.8)", borderRadius: 3, order: 2 },
+          { type: "bar", label: "失败", data: failedData, yAxisID: "y", backgroundColor: "rgba(252,129,74,0.8)", borderRadius: 3, order: 2 },
+          { type: "line", label: "积分消耗", data: creditsData, yAxisID: "y2", borderColor: "#a78bfa", backgroundColor: "rgba(167,139,250,0.08)", borderWidth: 2, pointRadius: 3, tension: 0.35, fill: true, order: 1 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", labels: { boxWidth: 10, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              afterBody: (items) => {
+                const i = items[0]?.dataIndex;
+                if (i == null) return;
+                const total = jobsData[i];
+                const rate = total ? Math.round((succeededData[i] / total) * 100) : 0;
+                return `总任务: ${total}  成功率: ${rate}%`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { beginAtZero: true, stacked: true, ticks: { precision: 0, font: { size: 11 } }, title: { display: true, text: "任务数", font: { size: 11 } } },
+          y2: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false }, ticks: { font: { size: 11 } }, title: { display: true, text: "积分", font: { size: 11 } } },
+        },
+      },
+    });
+  }
+
+  // ── 图表2：模型调用分布（Doughnut）──
+  if (_modelChart) { _modelChart.destroy(); _modelChart = null; }
+  const modelCanvas = $("usageModelChart");
+  const byModel = (usage.byModel || []).slice(0, 8);
+  if (modelCanvas) {
+    _modelChart = new Chart(modelCanvas, {
+      type: "doughnut",
+      data: {
+        labels: byModel.map((m) => m.model),
+        datasets: [{ data: byModel.map((m) => m.jobs), backgroundColor: CHART_PALETTE, borderWidth: 2, borderColor: "#fff", hoverOffset: 6 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
+          title: { display: true, text: "模型调用分布", font: { size: 12, weight: "600" }, padding: { bottom: 8 } },
+          tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${ctx.parsed} 次` } },
+        },
+      },
+    });
+  }
+
+  // ── 图表3：渠道成功率（水平条形）──
+  if (_gatewayChart) { _gatewayChart.destroy(); _gatewayChart = null; }
+  const gwCanvas = $("usageGatewayChart");
+  const gatewayNames = new Map(state.gateways.map((g) => [g.id, g.name]));
+  const byGateway = (usage.byGateway || []).slice(0, 6);
+  if (gwCanvas) {
+    const gwLabels = byGateway.map((g) => gatewayNames.get(g.gatewayId) || g.gatewayId);
+    const gwSuccessRate = byGateway.map((g) => {
+      const done = (g.succeeded ?? 0) + (g.failed ?? 0);
+      return done ? Math.round(((g.succeeded ?? 0) / done) * 100) : null;
+    });
+    const gwJobs = byGateway.map((g) => g.jobs);
+    _gatewayChart = new Chart(gwCanvas, {
+      type: "bar",
+      data: {
+        labels: gwLabels,
+        datasets: [
+          { label: "成功率 %", data: gwSuccessRate, backgroundColor: gwSuccessRate.map((r) => r == null ? "#e2e8f0" : r >= 90 ? "rgba(104,211,145,0.8)" : r >= 70 ? "rgba(246,173,85,0.8)" : "rgba(252,129,74,0.8)"), borderRadius: 4, yAxisID: "y" },
+          { label: "总调用", data: gwJobs, backgroundColor: "rgba(99,179,237,0.25)", borderColor: "rgba(99,179,237,0.6)", borderWidth: 1, borderRadius: 4, yAxisID: "y2", type: "bar" },
+        ],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 11 }, padding: 8 } },
+          title: { display: true, text: "渠道成功率", font: { size: 12, weight: "600" }, padding: { bottom: 8 } },
+          tooltip: { callbacks: { label: (ctx) => ctx.datasetIndex === 0 ? ` 成功率: ${ctx.parsed.x ?? "-"}%` : ` 总调用: ${ctx.parsed.x}` } },
+        },
+        scales: {
+          x: { beginAtZero: true, max: 100, ticks: { font: { size: 11 }, callback: (v) => v + "%" }, grid: { display: false } },
+          y: { ticks: { font: { size: 11 } }, grid: { display: false } },
+          y2: { display: false, beginAtZero: true },
+        },
+      },
+    });
+  }
 }
 
 function renderOpsChecklist() {
@@ -980,17 +1097,26 @@ function renderCodeStats() {
   ].join("");
 }
 
-function renderCodes() {
-  renderCodeStats();
+function filteredCodes() {
   const search = $("codeSearch").value;
   const status = $("codeStatusFilter").value;
-  const rows = state.codes
+  return state.codes
     .filter((code) => !status || (status === "active" ? code.active : !code.active))
     .filter((code) => includesText(search, code.code, code.activityKey));
+}
+
+function renderCodes() {
+  renderCodeStats();
+  const rows = filteredCodes();
 
   $("codeRows").innerHTML = rows.map((code) => `
     <tr data-id="${code.id}">
-      <td><strong>${escapeHtml(code.code)}</strong></td>
+      <td>
+        <div class="code-cell">
+          <strong>${escapeHtml(code.code)}</strong>
+          <button class="small" data-action="copy-code" type="button">复制</button>
+        </div>
+      </td>
       <td><code>${escapeHtml(code.activityKey || code.code)}</code></td>
       <td>${Number(code.credits || 0)}</td>
       <td>${(code.usedBy || []).length}/${code.maxUses}</td>
@@ -1417,6 +1543,17 @@ document.addEventListener("click", async (event) => {
 
 $("closeDrawer").addEventListener("click", closeDrawer);
 $("drawerScrim").addEventListener("click", closeDrawer);
+
+$("usageDaysTabs").addEventListener("click", async (e) => {
+  const btn = e.target.closest(".days-tab");
+  if (!btn) return;
+  state.usageDays = parseInt(btn.dataset.days, 10);
+  $("usageDaysTabs").querySelectorAll(".days-tab").forEach(b => b.classList.toggle("active", b === btn));
+  try {
+    state.usage = await api("/api/admin/usage?days=" + state.usageDays);
+    renderUsage();
+  } catch (err) { toast(err.message, "error"); }
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeDrawer();
   if (event.key === "/" && !event.metaKey && !event.ctrlKey) {
@@ -1827,20 +1964,45 @@ $("codeForm").addEventListener("submit", async (event) => {
       const data = formData(form);
       data.credits = Number(data.credits || 0);
       data.maxUses = Number(data.maxUses || 0);
+      data.batchCount = Number(data.batchCount || 1);
+      if (data.batchCount > 1 && String(data.code || "").trim()) throw new Error("批量生成时请留空兑换码");
       data.expiresAt = isoFromLocal(data.expiresAt);
-      const { code } = await api("/api/admin/redemption-codes", { method: "POST", body: JSON.stringify(data) });
+      const { code, codes } = await api("/api/admin/redemption-codes", { method: "POST", body: JSON.stringify(data) });
+      const created = Array.isArray(codes) && codes.length ? codes : [code];
       form.reset();
-      state.codes.unshift(code);
-      appendAuditLog("redemption_code.create", code.id, { code: code.code, activityKey: code.activityKey, credits: code.credits, maxUses: code.maxUses });
+      form.elements.batchCount.value = "1";
+      form.elements.credits.value = data.credits || 100;
+      form.elements.maxUses.value = data.maxUses || 1;
+      state.codes.unshift(...created);
+      appendAuditLog(created.length > 1 ? "redemption_code.batch_create" : "redemption_code.create", created[0].id, {
+        count: created.length,
+        codes: created.map((item) => item.code),
+        activityKey: created[0].activityKey,
+        credits: created[0].credits,
+        maxUses: created[0].maxUses,
+      });
       rerenderAfterMutation();
     });
-    toast("兑换码已创建", "success");
+    toast("兑换码已生成", "success");
   } catch (error) {
     toast(error.message, "error");
   }
 });
 
 $("codeRows").addEventListener("click", async (event) => {
+  const copyButton = event.target.closest("button[data-action='copy-code']");
+  if (copyButton) {
+    try {
+      const id = copyButton.closest("tr").dataset.id;
+      const code = state.codes.find((item) => item.id === id);
+      await copyText(code?.code || "");
+      toast("兑换码已复制", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
   const button = event.target.closest("button[data-action='toggle-code']");
   if (!button) return;
   try {
@@ -1852,6 +2014,17 @@ $("codeRows").addEventListener("click", async (event) => {
     appendAuditLog("redemption_code.update", id, { active: nextActive });
     rerenderAfterMutation();
     toast("兑换码状态已更新", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("copyFilteredCodes").addEventListener("click", async (event) => {
+  try {
+    const codes = filteredCodes().map((code) => code.code);
+    if (!codes.length) throw new Error("当前列表没有可复制的兑换码");
+    await withBusy(event.currentTarget, "复制中", () => copyText(codes.join("\n")));
+    toast(`已复制 ${codes.length} 个兑换码`, "success");
   } catch (error) {
     toast(error.message, "error");
   }

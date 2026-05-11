@@ -28,6 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AdminService {
+  private static final int DEFAULT_REDEMPTION_CODE_LENGTH = 16;
+  private static final int MAX_REDEMPTION_BATCH_SIZE = 500;
+
   private final Db db;
   private final SecurityService security;
   private final AuthService auth;
@@ -77,7 +80,7 @@ public class AdminService {
       daily.put(key, Maps.of("date", key, "jobs", 0, "succeeded", 0, "failed", 0, "credits", 0));
     }
     Map<String, Integer> byModel = new LinkedHashMap<>();
-    Map<String, Integer> byGateway = new LinkedHashMap<>();
+    Map<String, int[]> byGateway = new LinkedHashMap<>(); // [jobs, succeeded, failed]
     for (ImageTask task : tasks) {
       String key = task.createdAt().atZone(ZoneOffset.UTC).toLocalDate().toString();
       Map<String, Object> item = daily.get(key);
@@ -88,7 +91,11 @@ public class AdminService {
         item.put("credits", ((Number) item.get("credits")).intValue() + task.costCredits());
       }
       byModel.merge(task.model(), 1, Integer::sum);
-      byGateway.merge(task.gatewayId() == null ? "unknown" : task.gatewayId(), 1, Integer::sum);
+      String gw = task.gatewayId() == null ? "unknown" : task.gatewayId();
+      int[] counts = byGateway.computeIfAbsent(gw, k -> new int[3]);
+      counts[0]++;
+      if ("success".equals(task.status())) counts[1]++;
+      if ("failed".equals(task.status())) counts[2]++;
     }
     long completed = tasks.stream().filter(task -> List.of("success", "failed").contains(task.status())).count();
     long succeeded = tasks.stream().filter(task -> "success".equals(task.status())).count();
@@ -104,7 +111,7 @@ public class AdminService {
       ),
       "daily", new ArrayList<>(daily.values()),
       "byModel", byModel.entrySet().stream().map(e -> Maps.of("model", e.getKey(), "jobs", e.getValue())).toList(),
-      "byGateway", byGateway.entrySet().stream().map(e -> Maps.of("gatewayId", e.getKey(), "jobs", e.getValue())).toList()
+      "byGateway", byGateway.entrySet().stream().map(e -> Maps.of("gatewayId", e.getKey(), "jobs", e.getValue()[0], "succeeded", e.getValue()[1], "failed", e.getValue()[2])).toList()
     );
   }
 
@@ -365,24 +372,35 @@ public class AdminService {
 
   @Transactional
   public Map<String, Object> createCode(User actor, HttpServletRequest request, RedemptionCodeRequest body) {
-    String code = Optional.ofNullable(body.getCode()).filter(s -> !s.isBlank()).orElse(Ids.randomBase62(8)).trim().toUpperCase();
-    String activityKey = normalizeActivityKey(body.getActivityKey(), code);
-    db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"code\" = :code", Map.of("code", code), db.redemptionCodeMapper())
-      .ifPresent(existing -> { throw AppException.conflict("CODE_EXISTS", "兑换码已存在，请更换一个新的代码"); });
-    String id = db.id();
-    db.jdbc().update("""
-      INSERT INTO "RedemptionCode" ("id", "code", "activityKey", "credits", "maxUses", "usedBy", "expiresAt", "active")
-      VALUES (:id, :code, :activityKey, :credits, :maxUses, ARRAY[]::TEXT[], :expiresAt, true)
-      """, new MapSqlParameterSource()
-      .addValue("id", id)
-      .addValue("code", code)
-      .addValue("activityKey", activityKey)
-      .addValue("credits", body.getCredits() == null ? 100 : body.getCredits())
-      .addValue("maxUses", body.getMaxUses() == null ? 1 : body.getMaxUses())
-      .addValue("expiresAt", body.getExpiresAt() == null || body.getExpiresAt().isBlank() ? null : java.sql.Timestamp.from(Instant.parse(body.getExpiresAt()))));
-    RedemptionCode record = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper()).orElseThrow();
-    audit(actor, request, "redemption_code.create", id, Maps.of("code", code, "activityKey", activityKey, "credits", record.credits(), "maxUses", record.maxUses()));
-    return Maps.of("code", record);
+    int batchCount = Math.max(1, Math.min(MAX_REDEMPTION_BATCH_SIZE, body.getBatchCount() == null ? 1 : body.getBatchCount()));
+    String manualCode = normalizeCode(body.getCode());
+    if (batchCount > 1 && manualCode != null) {
+      throw AppException.badRequest("BATCH_CODE_CONFLICT", "批量生成时请留空兑换码，由系统自动生成");
+    }
+
+    List<RedemptionCode> records = new ArrayList<>();
+    for (int index = 0; index < batchCount; index += 1) {
+      String code = manualCode == null ? uniqueRedemptionCode() : manualCode;
+      String activityKey = normalizeActivityKey(body.getActivityKey(), code);
+      String id = db.id();
+      db.jdbc().update("""
+        INSERT INTO "RedemptionCode" ("id", "code", "activityKey", "credits", "maxUses", "usedBy", "expiresAt", "active")
+        VALUES (:id, :code, :activityKey, :credits, :maxUses, ARRAY[]::TEXT[], :expiresAt, true)
+        """, new MapSqlParameterSource()
+        .addValue("id", id)
+        .addValue("code", code)
+        .addValue("activityKey", activityKey)
+        .addValue("credits", body.getCredits() == null ? 100 : body.getCredits())
+        .addValue("maxUses", body.getMaxUses() == null ? 1 : body.getMaxUses())
+        .addValue("expiresAt", body.getExpiresAt() == null || body.getExpiresAt().isBlank() ? null : java.sql.Timestamp.from(Instant.parse(body.getExpiresAt()))));
+      RedemptionCode record = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper()).orElseThrow();
+      records.add(record);
+    }
+
+    RedemptionCode first = records.get(0);
+    audit(actor, request, batchCount > 1 ? "redemption_code.batch_create" : "redemption_code.create", first.id(),
+      Maps.of("count", records.size(), "codes", records.stream().map(RedemptionCode::code).toList(), "activityKey", first.activityKey(), "credits", first.credits(), "maxUses", first.maxUses()));
+    return Maps.of("code", first, "codes", records);
   }
 
   @Transactional
@@ -421,6 +439,25 @@ public class AdminService {
   private String normalizeActivityKey(String value, String fallback) {
     String raw = Optional.ofNullable(value).filter(s -> !s.isBlank()).orElse(fallback);
     return raw.trim().toUpperCase().replaceAll("[^A-Z0-9_-]", "-");
+  }
+
+  private String normalizeCode(String value) {
+    if (value == null || value.isBlank()) return null;
+    String code = value.trim().toUpperCase().replaceAll("[^A-Z0-9]", "");
+    if (code.isBlank()) throw AppException.badRequest("INVALID_CODE", "兑换码只能包含数字和字母");
+    db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"code\" = :code", Map.of("code", code), db.redemptionCodeMapper())
+      .ifPresent(existing -> { throw AppException.conflict("CODE_EXISTS", "兑换码已存在，请更换一个新的代码"); });
+    return code;
+  }
+
+  private String uniqueRedemptionCode() {
+    for (int attempt = 0; attempt < 20; attempt += 1) {
+      String code = Ids.randomBase62(DEFAULT_REDEMPTION_CODE_LENGTH).toUpperCase();
+      if (db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"code\" = :code", Map.of("code", code), db.redemptionCodeMapper()).isEmpty()) {
+        return code;
+      }
+    }
+    throw AppException.unavailable("CODE_GENERATION_FAILED", "兑换码生成失败，请重试");
   }
 
   public Map<String, Object> publicGateway(Gateway gateway) {
