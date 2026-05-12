@@ -16,6 +16,9 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -424,27 +427,44 @@ public class ImageService {
     String apiKey = resolveGatewayApiKey(gateway);
     List<LoadedReferenceImage> referenceImages = loadReferenceImages(task.id());
     int count = Math.max(1, task.imageCount());
-    List<GatewayResult> results = new ArrayList<>();
-    UpstreamException lastError = null;
-    for (int index = 0; index < count; index += 1) {
-      try {
-        GatewayResult result = referenceImages.isEmpty()
-          ? callGatewayGeneration(task, gateway, apiKey, 1, index)
-          : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, index);
-        persistGatewayResult(task, result);
-        results.add(result);
-        db.jdbc().update("""
-          UPDATE "ImageTask" SET "updatedAt" = now() WHERE "id" = :id
-          """, Map.of("id", task.id()));
-      } catch (Exception exception) {
-        if (storageException(exception) != null) throw exception;
-        lastError = upstreamException(exception);
-        if (lastError == null) lastError = new UpstreamException("UPSTREAM_FAILED", exception.getMessage(), 0, true);
-        log.warn("[task={}] Gateway image {}/{} failed gateway={} code={} message={}",
-          task.id(), index + 1, count, gateway.name(), lastError.code(), lastError.getMessage());
+    ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    try {
+      List<CompletableFuture<ImageAttempt>> futures = new ArrayList<>();
+      for (int index = 0; index < count; index += 1) {
+        int variantIndex = index;
+        futures.add(CompletableFuture.supplyAsync(() -> callGatewayImage(task, gateway, apiKey, referenceImages, count, variantIndex), pool));
       }
+      List<GatewayResult> results = new ArrayList<>();
+      UpstreamException lastError = null;
+      for (CompletableFuture<ImageAttempt> future : futures) {
+        ImageAttempt attempt = future.join();
+        if (attempt.result() != null) results.add(attempt.result());
+        if (attempt.error() != null) lastError = attempt.error();
+      }
+      return new GenerationRun(results, lastError);
+    } finally {
+      pool.shutdown();
     }
-    return new GenerationRun(results, lastError);
+  }
+
+  private ImageAttempt callGatewayImage(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int count, int index) {
+    try {
+      GatewayResult result = referenceImages.isEmpty()
+        ? callGatewayGeneration(task, gateway, apiKey, 1, index)
+        : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, index);
+      persistGatewayResult(task, result);
+      db.jdbc().update("""
+        UPDATE "ImageTask" SET "updatedAt" = now() WHERE "id" = :id
+        """, Map.of("id", task.id()));
+      return new ImageAttempt(index, result, null);
+    } catch (Exception exception) {
+      if (storageException(exception) != null) throw new RuntimeException(exception);
+      UpstreamException error = upstreamException(exception);
+      if (error == null) error = new UpstreamException("UPSTREAM_FAILED", exception.getMessage(), 0, true);
+      log.warn("[task={}] Gateway image {}/{} failed gateway={} code={} message={}",
+        task.id(), index + 1, count, gateway.name(), error.code(), error.getMessage());
+      return new ImageAttempt(index, null, error);
+    }
   }
 
   private void persistGatewayResult(ImageTask task, GatewayResult result) {
@@ -781,6 +801,7 @@ public class ImageService {
 
   public record CreateTaskParams(String userId, String apiKeyId, String requestId, CreateImageRequest dto, List<MultipartFile> referenceFiles) {}
   private record GenerationRun(List<GatewayResult> results, UpstreamException lastError) {}
+  private record ImageAttempt(int index, GatewayResult result, UpstreamException error) {}
   private record GatewayResult(String url, String format, Integer width, Integer height, String storageKey, Integer sizeBytes, String hash, List<ExtraImage> extras) {}
   private record ExtraImage(String url, String storageKey, Integer sizeBytes, String hash) {}
   private record StoredImage(String storageKey, String url, Integer sizeBytes, String hash) {}
