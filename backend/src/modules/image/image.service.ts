@@ -561,7 +561,7 @@ export class ImageService {
 
   private async recordGatewayFailure(gateway: Gateway, message: string, latencyMs: number) {
     const failures = gateway.consecutiveFailures + 1;
-    const threshold = Number(this.config.get<string>("GATEWAY_FAILURE_THRESHOLD") || 3);
+    const threshold = Number(this.config.get<string>("GATEWAY_FAILURE_THRESHOLD") || 30);
     const cooldownMs = Number(this.config.get<string>("GATEWAY_COOLDOWN_MS") || 300000);
     await this.prisma.gateway.update({
       where: { id: gateway.id },

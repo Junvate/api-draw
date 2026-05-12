@@ -50,7 +50,7 @@ public class ImageService {
     QueueService queue,
     StorageService storage,
     @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot,
-    @Value("${GATEWAY_FAILURE_THRESHOLD:3}") int failureThreshold,
+    @Value("${GATEWAY_FAILURE_THRESHOLD:30}") int failureThreshold,
     @Value("${GATEWAY_COOLDOWN_MS:300000}") long cooldownMs
   ) {
     this.db = db;
