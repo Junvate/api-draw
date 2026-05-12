@@ -638,8 +638,6 @@ public class ImageService {
 
   private void recordGatewayFailure(Gateway gateway, String message, long latencyMs, String code) {
     int failures = gateway.consecutiveFailures() + 1;
-    boolean hardFailure = "UPSTREAM_AUTH_FAILED".equals(code) || "INVALID_GATEWAY_API_KEY".equals(code);
-    int nextFailures = hardFailure ? Math.max(failures, failureThreshold) : failures;
     db.jdbc().update("""
       UPDATE "Gateway" SET
         "healthStatus" = CAST(:healthStatus AS "GatewayHealth"),
@@ -653,9 +651,9 @@ public class ImageService {
       WHERE "id" = :id
       """, new MapSqlParameterSource()
       .addValue("id", gateway.id())
-      .addValue("healthStatus", nextFailures >= failureThreshold ? "down" : "degraded")
-      .addValue("failures", nextFailures)
-      .addValue("disabledUntil", nextFailures >= failureThreshold ? java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)) : null)
+      .addValue("healthStatus", failures >= failureThreshold ? "down" : "degraded")
+      .addValue("failures", failures)
+      .addValue("disabledUntil", failures >= failureThreshold ? java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)) : null)
       .addValue("latencyMs", Math.min(Integer.MAX_VALUE, latencyMs))
       .addValue("message", truncate(message, 1000)));
   }

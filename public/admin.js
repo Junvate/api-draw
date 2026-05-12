@@ -87,6 +87,7 @@ const quickActions = {
   ],
   channels: [
     ["gateway-check", "检测全部渠道", "click", "checkAllGateways", "green"],
+    ["gateway-enable-healthy", "一键启用熔断渠道", "click", "enableHealthyGateways", "primary"],
     ["gateway-create", "新增中转站", "open", "gatewayCreateBox", "primary"],
     ["jobs", "查看任务队列", "view", "jobs"],
   ],
@@ -1702,6 +1703,31 @@ $("checkAllGateways").addEventListener("click", async () => {
       const okCount = response.results.filter((item) => item.ok).length;
       const failedCount = response.results.length - okCount;
       toast(failedCount ? `测试完成 · 成功 ${okCount} 个，失败 ${failedCount} 个` : `测试成功 · ${okCount} 个渠道可用`, failedCount ? "error" : "success");
+    });
+  } catch (error) {
+    toast(error.message, "error");
+    await loadAll().catch(() => {});
+  }
+});
+
+$("enableHealthyGateways").addEventListener("click", async () => {
+  try {
+    await withBusy($("enableHealthyGateways"), "处理中", async () => {
+      const tripped = state.gateways.filter((g) => g.enabled && isCoolingDown(g));
+      if (!tripped.length) { toast("没有熔断中的渠道", "success"); return; }
+      let enabled = 0;
+      for (const gateway of tripped) {
+        const result = await api(`/api/admin/gateways/${gateway.id}/health-check`, { method: "POST" });
+        upsertById(state.gateways, result.gateway);
+        if (result.ok) {
+          const { gateway: updated } = await api(`/api/admin/gateways/${gateway.id}`, { method: "PATCH", body: JSON.stringify({ enabled: true, consecutiveFailures: 0, disabledUntil: null }) });
+          upsertById(state.gateways, updated);
+          appendAuditLog("gateway.update", gateway.id, { enabled: true });
+          enabled++;
+        }
+      }
+      rerenderAfterMutation();
+      toast(enabled ? `已启用 ${enabled} / ${tripped.length} 个健康渠道` : `检测完成，${tripped.length} 个渠道均不健康`, enabled ? "success" : "error");
     });
   } catch (error) {
     toast(error.message, "error");
