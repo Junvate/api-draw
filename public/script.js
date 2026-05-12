@@ -828,18 +828,40 @@ function showToast(message, type = "info") {
 
 function setButtonLoading(button, loading, label) {
   if (!button) return;
-  button.disabled = loading;
-  button.classList.toggle("is-loading", loading);
   if (loading) {
-    button.dataset.label = button.innerHTML;
+    if (!button.classList.contains("is-loading")) button.dataset.label = button.innerHTML;
+    button.disabled = true;
     button.textContent = label || "处理中";
-  } else if (button.dataset.label) {
-    button.innerHTML = button.dataset.label;
-    delete button.dataset.label;
+    button.setAttribute("aria-busy", "true");
+  } else {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    if (button.dataset.label) {
+      button.innerHTML = button.dataset.label;
+      delete button.dataset.label;
+    }
   }
+  button.classList.toggle("is-loading", loading);
 }
 
-async function refreshMe() {
+function withTimeout(promise, ms, message = "请求超时，请稍后重试") {
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = window.setTimeout(() => reject(new Error(message)), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function refreshMe({ throwOnError = false } = {}) {
   try {
     const { user } = await api("/api/me");
     if (!user) {
@@ -855,11 +877,12 @@ async function refreshMe() {
     updateAccount(null);
     renderJobs([]);
     resetResultStage();
+    if (throwOnError) throw new Error("账号信息刷新失败");
     return null;
   }
 }
 
-async function refreshJobs({ silent = false } = {}) {
+async function refreshJobs({ silent = false, throwOnError = false } = {}) {
   if (!state.user) {
     renderJobs([]);
     return [];
@@ -870,6 +893,7 @@ async function refreshJobs({ silent = false } = {}) {
     return state.jobs;
   } catch (error) {
     if (!silent) showToast(error.message, "error");
+    if (throwOnError) throw error;
     return state.jobs;
   }
 }
@@ -1245,8 +1269,10 @@ $("logoutButton").addEventListener("click", async () => {
 $("refreshAccount").addEventListener("click", async (event) => {
   setButtonLoading(event.currentTarget, true, "刷新中");
   try {
-    await refreshMe();
+    await withTimeout(refreshMe({ throwOnError: true }), 12000, "账号刷新超时，请稍后重试");
     showToast("账号信息已刷新");
+  } catch (error) {
+    showToast(error.message, "error");
   } finally {
     setButtonLoading(event.currentTarget, false);
   }
@@ -1255,9 +1281,11 @@ $("refreshAccount").addEventListener("click", async (event) => {
 $("refreshJobs").addEventListener("click", async (event) => {
   setButtonLoading(event.currentTarget, true, "刷新中");
   try {
-    const jobs = await refreshJobs();
+    const jobs = await withTimeout(refreshJobs({ silent: true, throwOnError: true }), 12000, "生成历史刷新超时，请稍后重试");
     if (jobs.length) hydrateWorkspaceFromJobs(jobs, { preferLatest: true });
     showToast("生成历史已刷新");
+  } catch (error) {
+    showToast(error.message, "error");
   } finally {
     setButtonLoading(event.currentTarget, false);
   }

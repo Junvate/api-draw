@@ -197,23 +197,25 @@ a { color: inherit; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
 }
 
 .status-card {
-  height: 32px;
-  min-width: 88px;
-  display: flex;
-  flex-direction: column;
+  height: 34px;
+  min-width: 116px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
-  padding: 0 10px;
+  gap: 2px;
+  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--surface);
 }
 
 .status-card.credit-status-card {
-  min-width: 74px;
+  min-width: 92px;
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
 }
@@ -229,10 +231,24 @@ a { color: inherit; }
   box-shadow: 0 0 0 3px rgba(26,111,196,.1);
 }
 
-.status-card span   { font-size: 10px; font-weight: 600; color: var(--muted); line-height: 1.1; }
+.status-card > span {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.status-card > span::after { content: "："; }
 .status-card strong {
   font-size: 13px; font-weight: 700; color: var(--ink);
-  line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px;
+  line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px;
+}
+.status-card strong span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 
 .top-action {
@@ -1037,9 +1053,9 @@ a { color: inherit; }
 .stage-result-image {
   position: absolute;
   z-index: 2;
-  inset: 28px 42px 42px;
+  inset: 28px 42px 66px;
   width: calc(100% - 84px);
-  height: calc(100% - 70px);
+  height: calc(100% - 94px);
   object-fit: contain;
   display: block;
   border: 1px solid var(--line);
@@ -1055,18 +1071,22 @@ a { color: inherit; }
 
 .stage-actions {
   position: absolute;
-  right: 18px;
-  bottom: 18px;
+  right: 28px;
+  bottom: 22px;
   z-index: 4;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: calc(100% - 56px);
 }
 
 .stage-action {
   height: 30px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   padding: 0 11px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1920,6 +1940,8 @@ button.is-loading { position: relative; cursor: wait; }
   flex: 1;
   min-width: 0;
 }
+.has-stage-thumbs .stage-actions { right: 114px; }
+
 .stage-thumbs {
   position: absolute;
   top: 28px;
@@ -1970,15 +1992,22 @@ button.is-loading { position: relative; cursor: wait; }
 
 @media (max-width: 700px) {
   .canvas-stage.has-stage-thumbs .stage-result-image {
-    inset: 20px 20px 104px;
+    inset: 20px 20px 152px;
     width: calc(100% - 40px);
-    height: calc(100% - 124px);
+    height: calc(100% - 172px);
+  }
+  .canvas-stage.has-stage-thumbs .stage-actions,
+  .stage-actions {
+    left: 20px;
+    right: 20px;
+    bottom: 16px;
+    max-width: calc(100% - 40px);
   }
   .stage-thumbs {
     top: auto;
     left: 20px;
     right: 20px;
-    bottom: 52px;
+    bottom: 76px;
     width: auto;
     height: 64px;
     flex-direction: row;
