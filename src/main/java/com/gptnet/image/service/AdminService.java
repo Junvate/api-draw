@@ -552,7 +552,7 @@ public class AdminService {
       .addValue("upstreamGroup", blankToNull(body.getUpstreamGroup()))
       .addValue("model", Optional.ofNullable(body.getModel()).filter(s -> !s.isBlank()).orElse("gpt-image-2").trim())
       .addValue("costCredits", body.getCostCredits() == null ? 8 : body.getCostCredits())
-      .addValue("timeoutMs", body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs())
+      .addValue("timeoutMs", body.getTimeoutMs() == null ? 300000 : body.getTimeoutMs())
       .addValue("enabled", Boolean.TRUE.equals(body.getEnabled()))
       .addValue("priority", body.getPriority() == null ? 1 : body.getPriority());
   }

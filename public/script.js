@@ -477,9 +477,15 @@ function formatResultHeadline(status) {
 
 function formatResultMessage(job) {
   if (!job) return "提交任务后，生成结果会显示在这里。";
+  const requested = Number(job.imageCount ?? job.image_count ?? 0);
+  const returned = Number(job.returnedCount ?? job.returned_count ?? normalizeResultImages(job).length);
   if (job.status === "queued") return "系统已保存这次创作请求，正在等待可用通道处理。";
-  if (job.status === "running" || job.status === "processing") return "图像正在生成中，通常几秒内会返回结果。";
+  if (job.status === "running" || job.status === "processing") {
+    if (requested > 1 && returned > 0) return `已生成 ${returned}/${requested} 张，剩余图片继续生成中。`;
+    return "图像正在生成中，通常几秒内会返回结果。";
+  }
   if (job.status === "failed") return job.error || "这次生成未成功完成，建议调整提示词后重试。";
+  if (requested > 1 && returned > 0 && returned < requested) return `已生成 ${returned}/${requested} 张，未返回的图片已自动退回积分。`;
   return job.prompt ? clipText(job.prompt, 96) : "已根据当前提示词生成预览图。";
 }
 

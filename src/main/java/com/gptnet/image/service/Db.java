@@ -105,7 +105,7 @@ public class Db {
     return jdbc.query("""
       SELECT * FROM "ImageResult"
       WHERE "taskId" = :taskId
-      ORDER BY "createdAt" DESC
+      ORDER BY "createdAt" ASC, "id" ASC
       """, Map.of("taskId", taskId), imageResultMapper());
   }
 

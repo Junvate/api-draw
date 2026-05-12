@@ -11,10 +11,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.IntStream;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -86,7 +82,7 @@ public class ImageService {
         )
         VALUES (
           'openai-primary', 'OpenAI 主网关', 'openai'::"GatewayProvider", 'https://api.openai.com/v1',
-          NULL, '/models', '/images/generations', 'gpt-image-2', 8, 90000, true, 10
+          NULL, '/models', '/images/generations', 'gpt-image-2', 8, 300000, true, 10
         )
         ON CONFLICT ("id") DO NOTHING
         """, Map.of());
@@ -188,63 +184,15 @@ public class ImageService {
       """, Map.of("id", task.id()));
     if (claimed == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
     try {
-      GatewayResult result = callGateway(task, gateway);
+      GenerationRun run = callGateway(task, gateway);
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
-      int returnedCount = 1 + result.extras().size();
+      int returnedCount = run.results().size();
+      if (returnedCount == 0) throw run.lastError() == null ? new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", 0, true) : run.lastError();
       int shortfall = Math.max(0, task.imageCount() - returnedCount);
       int unitCost = task.imageCount() > 0 ? task.costCredits() / task.imageCount() : task.costCredits();
       int refundAmount = shortfall > 0 ? unitCost * shortfall : 0;
       int finalCost = task.costCredits() - refundAmount;
-      db.jdbc().update("""
-        INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "width", "height", "storageKey", "sizeBytes", "hash")
-        VALUES (:id, :taskId, :url, :format, :width, :height, :storageKey, :sizeBytes, :hash)
-        ON CONFLICT ("taskId", "url") DO UPDATE SET
-          "format" = EXCLUDED."format",
-          "width" = EXCLUDED."width",
-          "height" = EXCLUDED."height",
-          "storageKey" = EXCLUDED."storageKey",
-          "sizeBytes" = EXCLUDED."sizeBytes",
-          "hash" = EXCLUDED."hash",
-          "createdAt" = now()
-        """, new MapSqlParameterSource()
-        .addValue("id", db.id())
-        .addValue("taskId", task.id())
-        .addValue("url", result.url())
-        .addValue("format", result.format())
-        .addValue("width", result.width())
-        .addValue("height", result.height())
-        .addValue("storageKey", result.storageKey())
-        .addValue("sizeBytes", result.sizeBytes())
-        .addValue("hash", result.hash()));
-      for (ExtraImage extra : result.extras()) {
-        db.jdbc().update("""
-          INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "storageKey", "sizeBytes", "hash")
-          VALUES (:id, :taskId, :url, :format, :storageKey, :sizeBytes, :hash)
-          ON CONFLICT ("taskId", "url") DO UPDATE SET
-            "storageKey" = EXCLUDED."storageKey",
-            "sizeBytes" = EXCLUDED."sizeBytes",
-            "hash" = EXCLUDED."hash"
-          """, new MapSqlParameterSource()
-          .addValue("id", db.id())
-          .addValue("taskId", task.id())
-          .addValue("url", extra.url())
-          .addValue("format", result.format())
-          .addValue("storageKey", extra.storageKey())
-          .addValue("sizeBytes", extra.sizeBytes())
-          .addValue("hash", extra.hash()));
-      }
-      if (refundAmount > 0) {
-        auth.lockUserWallet(task.userId());
-        db.jdbc().update("""
-          INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
-          VALUES (:id, :userId, :amount, 'generation_refund'::"WalletEntryReason", :refId, :actorId)
-          """, new MapSqlParameterSource()
-          .addValue("id", db.id())
-          .addValue("userId", task.userId())
-          .addValue("amount", refundAmount)
-          .addValue("refId", task.id())
-          .addValue("actorId", task.userId()));
-      }
+      if (refundAmount > 0) refundTaskCredits(task, refundAmount);
       db.jdbc().update("""
         INSERT INTO "UsageRecord" (
           "id", "userId", "apiKeyId", "taskId", "model", "imageCount", "costCredits", "latencyMs", "status"
@@ -273,13 +221,26 @@ public class ImageService {
         WHERE "id" = :id
         """, Map.of("id", gateway.id(), "latencyMs", latencyMs));
       db.jdbc().update("""
-        UPDATE "ImageTask" SET "status" = 'success'::"ImageTaskStatus", "latencyMs" = :latencyMs, "costCredits" = :costCredits, "finishedAt" = now(), "updatedAt" = now()
+        UPDATE "ImageTask" SET
+          "status" = 'success'::"ImageTaskStatus",
+          "latencyMs" = :latencyMs,
+          "costCredits" = :costCredits,
+          "errorCode" = :code,
+          "errorMessage" = :message,
+          "finishedAt" = now(),
+          "updatedAt" = now()
         WHERE "id" = :id
-        """, Map.of("id", task.id(), "latencyMs", latencyMs, "costCredits", finalCost));
+        """, new MapSqlParameterSource()
+        .addValue("id", task.id())
+        .addValue("latencyMs", latencyMs)
+        .addValue("costCredits", finalCost)
+        .addValue("code", run.lastError() == null ? null : run.lastError().code())
+        .addValue("message", run.lastError() == null ? null : truncate(run.lastError().getMessage(), 1000)));
       return db.imageTaskById(task.id()).map(db::hydrateTask).orElseThrow();
     } catch (Exception exception) {
-      if (exception instanceof StorageService.StorageException || exception.getCause() instanceof StorageService.StorageException) {
-        String message = exception.getMessage() == null ? "结果存储失败" : exception.getMessage();
+      StorageService.StorageException storageException = storageException(exception);
+      if (storageException != null) {
+        String message = storageException.getMessage() == null ? "结果存储失败" : storageException.getMessage();
         log.error("[task={}] Storage error: {}", task.id(), message, exception);
         return failTask(task, "STORAGE_FAILED", message, true);
       }
@@ -360,6 +321,21 @@ public class ImageService {
       .addValue("code", code)
       .addValue("message", truncate(message, 1000)));
     return db.imageTaskById(task.id()).map(db::hydrateTask).orElseThrow();
+  }
+
+  private void refundTaskCredits(ImageTask task, int amount) {
+    if (amount <= 0) return;
+    auth.lockUserWallet(task.userId());
+    db.jdbc().update("""
+      INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
+      VALUES (:id, :userId, :amount, 'generation_refund'::"WalletEntryReason", :refId, :actorId)
+      ON CONFLICT DO NOTHING
+      """, new MapSqlParameterSource()
+      .addValue("id", db.id())
+      .addValue("userId", task.userId())
+      .addValue("amount", amount)
+      .addValue("refId", task.id())
+      .addValue("actorId", task.userId()));
   }
 
   public Map<String, Object> publicTask(ImageTask rawTask, String userId) {
@@ -444,40 +420,75 @@ public class ImageService {
     return baseUrl.replaceAll("/$", "") + "/" + normalized.replaceAll("^/", "");
   }
 
-  private GatewayResult callGateway(ImageTask task, Gateway gateway) throws Exception {
+  private GenerationRun callGateway(ImageTask task, Gateway gateway) throws Exception {
     String apiKey = resolveGatewayApiKey(gateway);
     List<LoadedReferenceImage> referenceImages = loadReferenceImages(task.id());
     int count = Math.max(1, task.imageCount());
-    if (count == 1) {
-      return referenceImages.isEmpty()
-        ? callGatewayGeneration(task, gateway, apiKey, 1)
-        : callGatewayEdit(task, gateway, apiKey, referenceImages, 1);
+    List<GatewayResult> results = new ArrayList<>();
+    UpstreamException lastError = null;
+    for (int index = 0; index < count; index += 1) {
+      try {
+        GatewayResult result = referenceImages.isEmpty()
+          ? callGatewayGeneration(task, gateway, apiKey, 1, index)
+          : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, index);
+        persistGatewayResult(task, result);
+        results.add(result);
+        db.jdbc().update("""
+          UPDATE "ImageTask" SET "updatedAt" = now() WHERE "id" = :id
+          """, Map.of("id", task.id()));
+      } catch (Exception exception) {
+        if (storageException(exception) != null) throw exception;
+        lastError = upstreamException(exception);
+        if (lastError == null) lastError = new UpstreamException("UPSTREAM_FAILED", exception.getMessage(), 0, true);
+        log.warn("[task={}] Gateway image {}/{} failed gateway={} code={} message={}",
+          task.id(), index + 1, count, gateway.name(), lastError.code(), lastError.getMessage());
+      }
     }
-    // 并发调用 count 次，每次 n=1
-    ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    try {
-      List<CompletableFuture<GatewayResult>> futures = IntStream.range(0, count)
-        .mapToObj(i -> CompletableFuture.supplyAsync(() -> {
-          try {
-            return referenceImages.isEmpty()
-              ? callGatewayGeneration(task, gateway, apiKey, 1)
-              : callGatewayEdit(task, gateway, apiKey, referenceImages, 1);
-          } catch (Exception e) { throw new RuntimeException(e); }
-        }, pool))
-        .toList();
-      List<GatewayResult> results = futures.stream().map(CompletableFuture::join).toList();
-      GatewayResult first = results.get(0);
-      List<ExtraImage> extras = results.stream().skip(1)
-        .map(r -> new ExtraImage(r.url(), r.storageKey(), r.sizeBytes(), r.hash()))
-        .toList();
-      return new GatewayResult(first.url(), first.format(), first.width(), first.height(), first.storageKey(), first.sizeBytes(), first.hash(), extras);
-    } finally {
-      pool.shutdown();
+    return new GenerationRun(results, lastError);
+  }
+
+  private void persistGatewayResult(ImageTask task, GatewayResult result) {
+    db.jdbc().update("""
+      INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "width", "height", "storageKey", "sizeBytes", "hash")
+      VALUES (:id, :taskId, :url, :format, :width, :height, :storageKey, :sizeBytes, :hash)
+      ON CONFLICT ("taskId", "url") DO UPDATE SET
+        "format" = EXCLUDED."format",
+        "width" = EXCLUDED."width",
+        "height" = EXCLUDED."height",
+        "storageKey" = EXCLUDED."storageKey",
+        "sizeBytes" = EXCLUDED."sizeBytes",
+        "hash" = EXCLUDED."hash"
+      """, new MapSqlParameterSource()
+      .addValue("id", db.id())
+      .addValue("taskId", task.id())
+      .addValue("url", result.url())
+      .addValue("format", result.format())
+      .addValue("width", result.width())
+      .addValue("height", result.height())
+      .addValue("storageKey", result.storageKey())
+      .addValue("sizeBytes", result.sizeBytes())
+      .addValue("hash", result.hash()));
+    for (ExtraImage extra : result.extras()) {
+      db.jdbc().update("""
+        INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "storageKey", "sizeBytes", "hash")
+        VALUES (:id, :taskId, :url, :format, :storageKey, :sizeBytes, :hash)
+        ON CONFLICT ("taskId", "url") DO UPDATE SET
+          "storageKey" = EXCLUDED."storageKey",
+          "sizeBytes" = EXCLUDED."sizeBytes",
+          "hash" = EXCLUDED."hash"
+        """, new MapSqlParameterSource()
+        .addValue("id", db.id())
+        .addValue("taskId", task.id())
+        .addValue("url", extra.url())
+        .addValue("format", result.format())
+        .addValue("storageKey", extra.storageKey())
+        .addValue("sizeBytes", extra.sizeBytes())
+        .addValue("hash", extra.hash()));
     }
   }
 
   @SuppressWarnings("unchecked")
-  private GatewayResult callGatewayGeneration(ImageTask task, Gateway gateway, String apiKey, int n) {
+  private GatewayResult callGatewayGeneration(ImageTask task, Gateway gateway, String apiKey, int n, int variantIndex) {
     String generationPath = Optional.ofNullable(gateway.generationPath()).filter(s -> !s.isBlank()).orElse("/images/generations");
     String upstreamGroup = Optional.ofNullable(gateway.upstreamGroup()).filter(s -> !s.isBlank()).orElse(groupForSize(task.size()));
     Map<String, Object> body = Maps.of(
@@ -509,14 +520,14 @@ public class ImageService {
     List<StoredImage> stored = new ArrayList<>();
     for (int i = 0; i < dataList.size(); i++) {
       Map<String, Object> item = dataList.get(i);
-      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat(), i));
+      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat(), variantIndex + i));
     }
     StoredImage first = stored.get(0);
     List<ExtraImage> extras = stored.stream().skip(1).map(s -> new ExtraImage(s.url(), s.storageKey(), s.sizeBytes(), s.hash())).toList();
     return new GatewayResult(first.url(), task.outputFormat(), null, null, first.storageKey(), first.sizeBytes(), first.hash(), extras);
   }
 
-  private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n) {
+  private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n, int variantIndex) {
     String editPath = editPathForGateway(gateway);
     String upstreamGroup = Optional.ofNullable(gateway.upstreamGroup()).filter(s -> !s.isBlank()).orElse(groupForSize(task.size()));
     List<Part> parts = new ArrayList<>();
@@ -548,7 +559,7 @@ public class ImageService {
     List<StoredImage> stored = new ArrayList<>();
     for (int i = 0; i < dataList.size(); i++) {
       Map<String, Object> item = dataList.get(i);
-      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat(), i));
+      if (item.get("b64_json") != null) stored.add(persistGeneratedImage(task, String.valueOf(item.get("b64_json")), task.outputFormat(), variantIndex + i));
     }
     StoredImage first = stored.get(0);
     List<ExtraImage> extras = stored.stream().skip(1).map(s -> new ExtraImage(s.url(), s.storageKey(), s.sizeBytes(), s.hash())).toList();
@@ -672,6 +683,15 @@ public class ImageService {
     return null;
   }
 
+  private StorageService.StorageException storageException(Throwable throwable) {
+    Throwable current = throwable;
+    while (current != null) {
+      if (current instanceof StorageService.StorageException storageException) return storageException;
+      current = current.getCause();
+    }
+    return null;
+  }
+
   private boolean isCooling(Gateway gateway) {
     return gateway.disabledUntil() != null && gateway.disabledUntil().isAfter(Instant.now());
   }
@@ -760,6 +780,7 @@ public class ImageService {
   }
 
   public record CreateTaskParams(String userId, String apiKeyId, String requestId, CreateImageRequest dto, List<MultipartFile> referenceFiles) {}
+  private record GenerationRun(List<GatewayResult> results, UpstreamException lastError) {}
   private record GatewayResult(String url, String format, Integer width, Integer height, String storageKey, Integer sizeBytes, String hash, List<ExtraImage> extras) {}
   private record ExtraImage(String url, String storageKey, Integer sizeBytes, String hash) {}
   private record StoredImage(String storageKey, String url, Integer sizeBytes, String hash) {}

@@ -205,7 +205,7 @@ export class AdminController {
       upstreamGroup: body.upstreamGroup ? String(body.upstreamGroup).trim() : null,
       model: (body.model || "gpt-image-2").trim(),
       costCredits: Number(body.costCredits ?? 8),
-      timeoutMs: Number(body.timeoutMs ?? 90000),
+      timeoutMs: Number(body.timeoutMs ?? 300000),
       enabled: body.enabled === true,
       priority: Number(body.priority ?? 1),
     };

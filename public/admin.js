@@ -996,6 +996,8 @@ function renderGateways() {
         <div class="cell-stack gateway-cost">
           <input class="num-input ${Object.prototype.hasOwnProperty.call(draftState.draft, "costCredits") ? "is-dirty" : ""}" data-field="costCredits" type="number" value="${escapeHtml(rowInputValue("gateways", gateway.id, "costCredits", gateway))}" />
           <small>每次调用消耗积分</small>
+          <input class="num-input ${Object.prototype.hasOwnProperty.call(draftState.draft, "timeoutMs") ? "is-dirty" : ""}" data-field="timeoutMs" type="number" value="${escapeHtml(rowInputValue("gateways", gateway.id, "timeoutMs", gateway))}" placeholder="超时 ms" />
+          <small>超时毫秒数</small>
         </div>
       </td>
       <td>
