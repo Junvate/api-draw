@@ -173,7 +173,6 @@ public class ImageService {
     }
   }
 
-  @Transactional
   public ImageTask processTask(String taskId, int attempt, int maxAttempts) {
     ImageTask task = db.imageTaskById(taskId).map(db::hydrateTask).orElse(null);
     if (task == null || !"queued".equals(task.status())) return task;

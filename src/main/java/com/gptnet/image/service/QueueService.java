@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,6 +27,7 @@ public class QueueService {
   private final boolean workerEnabled;
   private final long stalledTaskMs;
   private final long queueLimit;
+  private final AtomicLong lastMaintenanceAt = new AtomicLong(0);
   private ImageService imageService;
   private ExecutorService executor;
 
@@ -33,12 +35,12 @@ public class QueueService {
     StringRedisTemplate redis,
     Db db,
     @Value("${REDIS_KEY_PREFIX:draw:}") String keyPrefix,
-    @Value("${IMAGE_WORKER_CONCURRENCY:10}") int concurrency,
+    @Value("${IMAGE_WORKER_CONCURRENCY:200}") int concurrency,
     @Value("${IMAGE_JOB_ATTEMPTS:3}") int attempts,
     @Value("${IMAGE_JOB_BACKOFF_MS:5000}") long backoffMs,
     @Value("${IMAGE_WORKER_ENABLED:true}") boolean workerEnabled,
     @Value("${IMAGE_STALLED_TASK_MS:600000}") long stalledTaskMs,
-    @Value("${GATEWAY_QUEUE_LIMIT:200}") long queueLimit
+    @Value("${GATEWAY_QUEUE_LIMIT:5000}") long queueLimit
   ) {
     this.redis = redis;
     this.db = db;
@@ -94,15 +96,14 @@ public class QueueService {
 
   public void startWorker() {
     if (!workerEnabled || !started.compareAndSet(false, true)) return;
-    executor = Executors.newFixedThreadPool(concurrency);
+    executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("image-worker-", 0).factory());
     for (int index = 0; index < concurrency; index += 1) {
       executor.submit(this::workerLoop);
     }
   }
 
   public QueueStats stats() {
-    releaseDueDelayed();
-    recoverStalledActive();
+    runMaintenance();
     long waiting = len("image:waiting");
     long active = size("image:active");
     long completed = value("image:completed");
@@ -118,8 +119,7 @@ public class QueueService {
       String taskId = null;
       boolean locked = false;
       try {
-        releaseDueDelayed();
-        recoverStalledActive();
+        runMaintenance();
         taskId = redis.opsForList().rightPop(key("image:waiting"), Duration.ofSeconds(2));
         if (taskId == null || taskId.isBlank()) continue;
         locked = Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(
@@ -175,6 +175,14 @@ public class QueueService {
     int attempt = attempt(taskId);
     long runAt = Instant.now().toEpochMilli() + Math.max(1000, backoffMs * Math.max(1, attempt));
     redis.opsForZSet().add(key("image:delayed"), taskId, runAt);
+  }
+
+  private void runMaintenance() {
+    long now = Instant.now().toEpochMilli();
+    long previous = lastMaintenanceAt.get();
+    if (now - previous < 1000 || !lastMaintenanceAt.compareAndSet(previous, now)) return;
+    releaseDueDelayed();
+    recoverStalledActive();
   }
 
   private void releaseDueDelayed() {

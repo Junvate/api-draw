@@ -20,6 +20,9 @@ spring:
   flyway:
     enabled: true
     baseline-on-migrate: true
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:50}
   web:
     resources:
       static-locations:
