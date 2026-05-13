@@ -520,7 +520,6 @@ public class ImageService {
       "prompt", task.prompt(),
       "size", task.size(),
       "output_format", task.outputFormat(),
-      "response_format", "url",
       "background", task.background(),
       "n", n
     );
@@ -559,7 +558,6 @@ public class ImageService {
     if (upstreamGroup != null) parts.add(Part.text("group", upstreamGroup));
     parts.add(Part.text("prompt", task.prompt()));
     parts.add(Part.text("size", task.size()));
-    parts.add(Part.text("response_format", "url"));
     parts.add(Part.text("n", String.valueOf(n)));
     for (LoadedReferenceImage image : referenceImages) {
       parts.add(Part.file("image", image.bytes(), image.filename(), image.contentType()));

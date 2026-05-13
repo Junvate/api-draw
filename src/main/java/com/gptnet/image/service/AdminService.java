@@ -366,7 +366,6 @@ public class AdminService {
       "prompt", prompt,
       "size", size,
       "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
-      "response_format", "url",
       "background", background,
       "n", 1
     );
