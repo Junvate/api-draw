@@ -56,6 +56,26 @@ public final class AdminDtos {
     public void setReason(String reason) { this.reason = reason; }
   }
 
+  public static class CallSquareTestRequest {
+    @Size(max = 500)
+    private String url;
+    @Size(max = 500)
+    private String baseUrl;
+    @Size(max = 2048)
+    private String apiKey;
+    @Size(max = 120)
+    private String model;
+
+    public String getUrl() { return url; }
+    public void setUrl(String url) { this.url = url; }
+    public String getBaseUrl() { return baseUrl; }
+    public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+    public String getApiKey() { return apiKey; }
+    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public String getModel() { return model; }
+    public void setModel(String model) { this.model = model; }
+  }
+
   public static class GatewayRequest {
     @Size(max = 120)
     private String name;

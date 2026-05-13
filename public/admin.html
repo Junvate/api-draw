@@ -23,8 +23,10 @@
           <span class="nav-label">工作台</span>
           <button data-view="overview" type="button"><span class="nav-icon">▣</span><span>首页</span><small id="navOverviewCount">-</small></button>
           <button class="active" data-view="channels" type="button"><span class="nav-icon">◈</span><span>上游渠道</span><small id="navChannelCount">-</small></button>
+          <button data-view="call-square" type="button"><span class="nav-icon">⌁</span><span>调用广场</span><small>Test</small></button>
           <button data-view="users" type="button"><span class="nav-icon">●</span><span>用户管理</span><small id="navUserCount">-</small></button>
           <button data-view="jobs" type="button"><span class="nav-icon">☰</span><span>任务管理</span><small id="navJobCount">-</small></button>
+          <button data-view="gallery" type="button"><span class="nav-icon">▦</span><span>作品看板</span><small id="navGalleryCount">-</small></button>
           <span class="nav-label">系统管理</span>
           <button data-view="risk" type="button"><span class="nav-icon">!</span><span>敏感词风控</span><small id="navRiskCount">-</small></button>
           <button data-view="codes" type="button"><span class="nav-icon">▤</span><span>兑换码</span><small id="navCodeCount">-</small></button>
@@ -279,6 +281,41 @@
             </section>
           </section>
 
+          <section class="view" data-panel="call-square">
+            <section class="call-square-panel panel">
+              <div class="call-square-header">
+                <div>
+                  <span class="channel-panel-eyebrow">Channel Probe</span>
+                  <h2>调用广场</h2>
+                  <p>临时验证上游 URL、API Key 和模型，不写入渠道配置。</p>
+                </div>
+                <button data-view-jump="channels" type="button">返回渠道</button>
+              </div>
+
+              <div class="call-square-body">
+                <form class="call-square-form" id="callSquareForm" autocomplete="off">
+                  <label class="call-square-url">URL
+                    <input name="url" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1" inputmode="url" required />
+                  </label>
+                  <label>API Key
+                    <input name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
+                  </label>
+                  <label>Model
+                    <input name="model" value="gpt-image-2" placeholder="gpt-image-2" required />
+                  </label>
+                  <button class="primary" id="callSquareSubmit" type="submit">测试连接</button>
+                </form>
+
+                <div class="call-square-result empty" id="callSquareResult">
+                  <div class="call-square-empty">
+                    <strong>等待测试</strong>
+                    <span>提交后会请求上游 /models，并检查返回列表里是否包含该模型。</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+
           <section class="view" data-panel="users">
             <section class="panel">
               <div class="panel-head">
@@ -339,6 +376,40 @@
                   <tbody id="jobRows"></tbody>
                 </table>
               </div>
+            </section>
+          </section>
+
+          <section class="view" data-panel="gallery">
+            <section class="panel gallery-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>作品看板</h2>
+                  <p id="galleryMeta">最近 3000 张生成图片，每页约 500 张</p>
+                </div>
+                <button id="galleryReloadButton" data-action="reload-gallery" type="button">刷新看板</button>
+              </div>
+              <div class="section-stats" id="galleryStats"></div>
+              <div class="toolbar gallery-toolbar">
+                <input id="gallerySearch" placeholder="搜索用户、模型、提示词、任务 ID" />
+                <select id="galleryStatusFilter">
+                  <option value="">全部状态</option>
+                  <option value="succeeded">成功</option>
+                  <option value="failed">失败</option>
+                  <option value="running">处理中</option>
+                  <option value="queued">排队</option>
+                </select>
+                <select id="galleryPageSize">
+                  <option value="500">每页 500</option>
+                  <option value="300">每页 300</option>
+                  <option value="100">每页 100</option>
+                </select>
+                <div class="gallery-pager">
+                  <button id="galleryPrevPage" type="button">上一页</button>
+                  <span id="galleryPageInfo">-</span>
+                  <button id="galleryNextPage" type="button">下一页</button>
+                </div>
+              </div>
+              <div class="gallery-grid" id="galleryGrid"></div>
             </section>
           </section>
 
@@ -516,8 +587,8 @@
     <nav class="mobile-dock" id="mobileDock" aria-label="移动端快捷导航">
       <button data-mobile-view="overview" type="button"><span>▣</span><small>首页</small></button>
       <button data-mobile-view="channels" type="button"><span>◈</span><small>渠道</small></button>
+      <button data-mobile-view="call-square" type="button"><span>⌁</span><small>测试</small></button>
       <button data-mobile-view="jobs" type="button"><span>☰</span><small>任务</small></button>
-      <button data-mobile-view="risk" type="button"><span>!</span><small>风控</small></button>
       <button data-mobile-menu type="button"><span>◎</span><small>更多</small></button>
     </nav>
     <div class="drawer-scrim hidden" id="drawerScrim"></div>
@@ -531,6 +602,24 @@
       </div>
       <div class="drawer-body" id="drawerBody"></div>
     </aside>
+    <div class="code-batch-scrim hidden" id="codeBatchScrim"></div>
+    <section class="code-batch-popover hidden" id="codeBatchPopover" aria-hidden="true">
+      <div class="code-batch-head">
+        <div>
+          <span>本次创建</span>
+          <h2 id="codeBatchTitle">兑换码已生成</h2>
+          <p id="codeBatchMeta"></p>
+        </div>
+        <button id="closeCodeBatchPopover" type="button" aria-label="关闭">关闭</button>
+      </div>
+      <div class="code-batch-body">
+        <pre id="codeBatchList"></pre>
+      </div>
+      <div class="code-batch-actions">
+        <button class="primary" id="copyCreatedCodes" type="button">复制本次创建</button>
+        <button id="copyCreatedCodesCsv" type="button">复制含活动</button>
+      </div>
+    </section>
     <div class="toast-stack" id="toastStack"></div>
     <script src="/admin.js"></script>
   </body>

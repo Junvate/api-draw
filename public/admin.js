@@ -18,6 +18,15 @@ const state = {
   gateways: [],
   codes: [],
   jobs: [],
+  gallery: {
+    images: [],
+    limit: 500,
+    offset: 0,
+    total: 0,
+    maxItems: 3000,
+    page: 0,
+    pageCount: 0,
+  },
   logs: [],
   sensitiveRules: [],
   riskAlerts: [],
@@ -37,6 +46,7 @@ const state = {
   refreshTimer: null,
   loadingAll: false,
   lastLoadPromise: null,
+  lastCreatedCodes: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -49,8 +59,10 @@ const clip = (value, length = 72) => {
 const titles = {
   overview: ["首页", "业务健康、渠道能力和近期风险"],
   channels: ["上游渠道", "每个渠道代表一个上游入口或中转站"],
+  "call-square": ["调用广场", "临时测试上游 URL、API Key 和模型"],
   users: ["用户", "账号状态与积分"],
   jobs: ["任务", "最近 100 条绘图请求"],
+  gallery: ["作品看板", "最近 3000 张生成图片"],
   risk: ["敏感词风控", "正则规则、拦截记录和用户告警"],
   codes: ["兑换码", "积分兑换和活动发放"],
   audit: ["审计", "最近 100 条操作记录"],
@@ -62,6 +74,7 @@ const searchTargets = {
   channels: "gatewaySearch",
   users: "userSearch",
   jobs: "jobSearch",
+  gallery: "gallerySearch",
   risk: "riskSearch",
   codes: "codeSearch",
   audit: "auditSearch",
@@ -82,6 +95,7 @@ const renderers = {
   channels: renderGateways,
   users: renderUsers,
   jobs: renderJobs,
+  gallery: renderGallery,
   risk: renderRisk,
   codes: renderCodes,
   audit: renderAudit,
@@ -90,13 +104,20 @@ const renderers = {
 const quickActions = {
   overview: [
     ["channels", "渠道配置", "view", "channels"],
+    ["call-square", "渠道测试", "view", "call-square", "primary"],
     ["jobs", "查看绘图任务", "view", "jobs"],
   ],
   channels: [
+    ["call-square", "调用广场", "view", "call-square", "primary"],
     ["gateway-check", "检测全部渠道", "click", "checkAllGateways", "green"],
     ["gateway-enable-healthy", "一键启用熔断渠道", "click", "enableHealthyGateways", "primary"],
     ["gateway-create", "新增中转站", "open", "gatewayCreateBox", "primary"],
     ["jobs", "查看任务队列", "view", "jobs"],
+  ],
+  "call-square": [
+    ["call-square-test", "测试连接", "click", "callSquareSubmit", "primary"],
+    ["channels", "渠道清单", "view", "channels"],
+    ["system", "系统探针", "view", "system"],
   ],
   users: [
     ["user-create", "创建用户", "open", "userCreateBox", "primary"],
@@ -106,6 +127,11 @@ const quickActions = {
     ["jobs-running", "处理中", "filter", "jobStatusFilter:running"],
     ["jobs-failed", "失败任务", "filter", "jobStatusFilter:failed", "danger"],
     ["system", "队列状态", "view", "system"],
+  ],
+  gallery: [
+    ["gallery-refresh", "刷新看板", "click", "galleryReloadButton", "primary"],
+    ["gallery-success", "只看成功", "filter", "galleryStatusFilter:succeeded", "green"],
+    ["jobs", "查看任务", "view", "jobs"],
   ],
   risk: [
     ["risk-import", "批量导入规则", "focus", "sensitiveWordPatterns", "primary"],
@@ -313,6 +339,10 @@ function formatLatency(value) {
 function adminJobResultUrl(job) {
   if (!job?.resultUrl) return "";
   return job.resultUrl;
+}
+
+function galleryImageUrl(item) {
+  return item?.thumbnailUrl || item?.url || "";
 }
 
 function toast(message, type = "info") {
@@ -568,6 +598,7 @@ function clearAdminData() {
   state.gateways = [];
   state.codes = [];
   state.jobs = [];
+  state.gallery = { images: [], limit: 500, offset: 0, total: 0, maxItems: 3000, page: 0, pageCount: 0 };
   state.logs = [];
   state.sensitiveRules = [];
   state.riskAlerts = [];
@@ -647,6 +678,7 @@ async function ensureAdmin() {
     setAdminVisible(true);
     resetTransientUi({ keepLoginMessage: true });
     await loadAll();
+    if (activeView() === "gallery") await loadGallery();
     applyAutoRefresh();
   } catch (error) {
     state.user = null;
@@ -702,6 +734,24 @@ async function loadAll() {
   return state.lastLoadPromise;
 }
 
+async function loadGallery(options = {}) {
+  if (options.reset) state.gallery.offset = 0;
+  const limit = Math.min(Math.max(Number(state.gallery.limit || 500), 1), 500);
+  const offset = Math.max(Number(state.gallery.offset || 0), 0);
+  const payload = await api(`/api/admin/gallery?limit=${limit}&offset=${offset}`);
+  state.gallery = {
+    images: payload.images || [],
+    limit: Number(payload.limit || limit),
+    offset: Number(payload.offset || offset),
+    total: Number(payload.total || 0),
+    maxItems: Number(payload.maxItems || 3000),
+    page: Number(payload.page || 0),
+    pageCount: Number(payload.pageCount || 0),
+  };
+  renderGallery();
+  renderNavCounts();
+}
+
 function pruneSelections() {
   const gatewayIds = new Set(state.gateways.map((item) => item.id));
   const userIds = new Set(state.users.map((item) => item.id));
@@ -726,6 +776,7 @@ function renderAll() {
   renderGateways();
   renderUsers();
   renderJobs();
+  renderGallery();
   renderRisk();
   renderCodes();
   renderAudit();
@@ -741,6 +792,7 @@ function renderNavCounts() {
   $("navChannelCount").textContent = `${activeGateways}/${state.gateways.length}`;
   $("navUserCount").textContent = `${activeUsers}/${state.users.length}`;
   $("navJobCount").textContent = openJobs ? `${openJobs} 待` : `${state.jobs.length}`;
+  $("navGalleryCount").textContent = state.gallery.total ? `${state.gallery.total}` : "-";
   $("navRiskCount").textContent = openRiskAlerts ? `${openRiskAlerts} 告警` : `${state.sensitiveRules.filter((rule) => rule.enabled).length} 规则`;
   $("navCodeCount").textContent = `${activeCodes}/${state.codes.length}`;
   $("navAuditCount").textContent = `${state.logs.length}`;
@@ -1138,6 +1190,70 @@ function renderJobs() {
   `).join("") || tableEmpty(8);
 }
 
+function filteredGalleryImages() {
+  const search = $("gallerySearch")?.value || "";
+  const status = $("galleryStatusFilter")?.value || "";
+  return (state.gallery.images || [])
+    .filter((item) => !status || item.status === status)
+    .filter((item) => includesText(
+      search,
+      item.id,
+      item.taskId,
+      item.userEmail,
+      item.userName,
+      item.userId,
+      item.model,
+      item.prompt,
+      item.gatewayId,
+      item.requestId,
+      item.status,
+      item.size,
+      item.quality,
+    ));
+}
+
+function renderGalleryStats(rows = filteredGalleryImages()) {
+  const total = Number(state.gallery.total || 0);
+  const maxItems = Number(state.gallery.maxItems || 3000);
+  const pageStart = total === 0 ? 0 : Number(state.gallery.offset || 0) + 1;
+  const pageEnd = Math.min(Number(state.gallery.offset || 0) + Number(state.gallery.limit || 0), total);
+  const uniqueUsers = new Set(rows.map((item) => item.userId).filter(Boolean)).size;
+  const success = rows.filter((item) => item.status === "succeeded").length;
+  $("galleryStats").innerHTML = [
+    statCard("可浏览图片", total, `最近上限 ${maxItems} 张`),
+    statCard("当前页范围", `${pageStart}-${pageEnd}`, `每页 ${state.gallery.limit} 张`),
+    statCard("当前页命中", rows.length, `${uniqueUsers} 个用户`),
+    statCard("成功图片", success, "当前筛选页内"),
+  ].join("");
+}
+
+function renderGallery() {
+  const rows = filteredGalleryImages();
+  renderGalleryStats(rows);
+  const pageCount = Number(state.gallery.pageCount || 0);
+  const page = Number(state.gallery.page || 0);
+  $("galleryMeta").textContent = `最近 ${state.gallery.maxItems} 张生成图片，当前加载 ${state.gallery.images.length} 张`;
+  $("galleryPageInfo").textContent = pageCount ? `${page}/${pageCount}` : "0/0";
+  $("galleryPrevPage").disabled = state.gallery.offset <= 0;
+  $("galleryNextPage").disabled = pageCount === 0 || page >= pageCount;
+  $("galleryPageSize").value = String(state.gallery.limit || 500);
+  $("galleryGrid").innerHTML = rows.map((item) => {
+    const imageUrl = galleryImageUrl(item);
+    return `
+      <article class="gallery-card" data-id="${escapeHtml(item.id)}">
+        <button class="gallery-thumb" data-action="detail-gallery-image" type="button" aria-label="查看作品详情">
+          ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(clip(item.prompt || "生成图片", 48))}" loading="lazy" />` : `<span>无图</span>`}
+        </button>
+        <div class="gallery-card-meta">
+          <strong title="${escapeHtml(item.prompt || "")}">${escapeHtml(clip(item.prompt || "无提示词", 34))}</strong>
+          <span>${escapeHtml(item.userEmail || item.userName || item.userId || "未知用户")}</span>
+          <small>${escapeHtml(item.model || "-")} · ${formatShortDate(item.createdAt)}</small>
+        </div>
+      </article>
+    `;
+  }).join("") || `<div class="empty-gallery">没有匹配的图片</div>`;
+}
+
 function renderRiskStats() {
   const enabled = state.sensitiveRules.filter((rule) => rule.enabled).length;
   const disabled = state.sensitiveRules.length - enabled;
@@ -1312,6 +1428,31 @@ function closeDrawer() {
   $("detailDrawer").setAttribute("aria-hidden", "true");
 }
 
+function codeBatchText(includeMeta = false) {
+  return state.lastCreatedCodes.map((code) => {
+    if (!includeMeta) return code.code;
+    return [code.code, code.activityKey || "", code.credits || "", code.maxUses || ""].join("\t");
+  }).join("\n");
+}
+
+function showCreatedCodesPopover(codes) {
+  state.lastCreatedCodes = Array.isArray(codes) ? codes.filter(Boolean) : [];
+  if (!state.lastCreatedCodes.length) return;
+  const first = state.lastCreatedCodes[0];
+  $("codeBatchTitle").textContent = state.lastCreatedCodes.length > 1 ? `已生成 ${state.lastCreatedCodes.length} 个兑换码` : "已生成 1 个兑换码";
+  $("codeBatchMeta").textContent = `${first.activityKey || first.code} · ${Number(first.credits || 0)} 积分 · 每码 ${first.maxUses || 1} 次`;
+  $("codeBatchList").textContent = codeBatchText(false);
+  $("codeBatchScrim").classList.remove("hidden");
+  $("codeBatchPopover").classList.remove("hidden");
+  $("codeBatchPopover").setAttribute("aria-hidden", "false");
+}
+
+function closeCreatedCodesPopover() {
+  $("codeBatchScrim").classList.add("hidden");
+  $("codeBatchPopover").classList.add("hidden");
+  $("codeBatchPopover").setAttribute("aria-hidden", "true");
+}
+
 function showGatewayDetail(id) {
   const gateway = state.gateways.find((item) => item.id === id);
   if (!gateway) return;
@@ -1443,6 +1584,53 @@ function showJobDetail(id) {
   `);
 }
 
+function showGalleryDetail(id) {
+  const item = (state.gallery.images || []).find((image) => image.id === id);
+  if (!item) return;
+  const imageUrl = item.url || item.thumbnailUrl || "";
+  openDrawer("作品详情", `${item.userEmail || item.userId || "未知用户"} · ${formatDate(item.createdAt)}`, `
+    ${imageUrl ? `<a class="drawer-result" href="${escapeHtml(imageUrl)}" target="_blank" rel="noreferrer">打开原图</a>` : ""}
+    ${imageUrl ? `
+      <div class="detail-section">
+        <h3>图片预览</h3>
+        <div class="drawer-preview-card gallery-drawer-preview">
+          <img class="drawer-preview" src="${escapeHtml(imageUrl)}" alt="作品预览" loading="lazy" />
+        </div>
+      </div>
+    ` : ""}
+    <div class="detail-section">
+      <h3>图片信息</h3>
+      ${fieldRow("图片 ID", item.id)}
+      ${fieldRow("任务 ID", item.taskId)}
+      ${fieldRow("尺寸", item.width && item.height ? `${item.width} × ${item.height}` : item.size || "-")}
+      ${fieldRow("格式", item.format || "-")}
+      ${fieldRow("大小", item.sizeBytes ? `${Math.round(Number(item.sizeBytes) / 1024)} KB` : "-")}
+      ${fieldRow("生成时间", formatDate(item.createdAt))}
+    </div>
+    <div class="detail-section">
+      <h3>用户与任务</h3>
+      ${fieldRow("用户", item.userEmail || item.userName || item.userId || "-")}
+      ${fieldRow("模型", item.model || "-")}
+      ${fieldRow("质量", item.quality || "-")}
+      ${fieldRow("状态", statusLabel(item.status))}
+      ${fieldRow("积分", Number(item.costCredits || 0))}
+      ${fieldRow("渠道", item.gatewayId || "-")}
+      ${fieldRow("耗时", item.latencyMs ? formatLatency(item.latencyMs) : "-")}
+    </div>
+    <div class="detail-section">
+      <h3>提示词</h3>
+      <p class="prompt-box">${escapeHtml(item.prompt || "-")}</p>
+    </div>
+    <div class="detail-section">
+      <h3>快捷操作</h3>
+      <div class="drawer-action-list">
+        <button class="drawer-action" type="button" data-drawer-action="detail-job" data-job-id="${escapeHtml(item.taskId)}">查看关联任务</button>
+        ${imageUrl ? `<a class="drawer-action" href="${escapeHtml(imageUrl)}" target="_blank" rel="noreferrer">新窗口打开</a>` : ""}
+      </div>
+    </div>
+  `);
+}
+
 function showAuditDetail(id) {
   const log = state.logs.find((item) => item.id === id);
   if (!log) return;
@@ -1523,6 +1711,45 @@ function gatewayTestMessage(response) {
   return `测试失败${response.error ? `：${response.error}` : ""}`;
 }
 
+function renderCallSquareResult(result) {
+  const target = $("callSquareResult");
+  if (!target) return;
+  if (!result) {
+    target.className = "call-square-result empty";
+    target.innerHTML = `
+      <div class="call-square-empty">
+        <strong>等待测试</strong>
+        <span>提交后会请求上游 /models，并检查返回列表里是否包含该模型。</span>
+      </div>
+    `;
+    return;
+  }
+  const models = Array.isArray(result.models) ? result.models : [];
+  target.className = `call-square-result ${result.ok ? "ok" : "error"}`;
+  target.innerHTML = `
+    <div class="call-square-result-head">
+      <div>
+        <span>${result.ok ? "测试通过" : "测试失败"}</span>
+        <strong>${escapeHtml(result.model || "-")}</strong>
+      </div>
+      ${statusBadge(result.ok ? "healthy" : "failed")}
+    </div>
+    <div class="call-square-kpis">
+      <div><span>HTTP</span><strong>${escapeHtml(result.status || 0)}</strong></div>
+      <div><span>耗时</span><strong>${escapeHtml(formatLatency(result.latencyMs))}</strong></div>
+      <div><span>模型命中</span><strong>${result.modelFound ? "是" : "否"}</strong></div>
+    </div>
+    <div class="call-square-detail">
+      <label>请求地址<input readonly value="${escapeHtml(result.url || "-")}" /></label>
+      ${result.error ? `<div class="call-square-error">${escapeHtml(result.error)}</div>` : ""}
+      <div class="model-chip-list">
+        ${models.slice(0, 24).map((model) => `<span class="${model === result.model ? "active" : ""}">${escapeHtml(model)}</span>`).join("") || "<span>未返回模型列表</span>"}
+      </div>
+      ${result.rawPreview ? `<details class="call-square-raw"><summary>原始返回</summary><pre>${escapeHtml(result.rawPreview)}</pre></details>` : ""}
+    </div>
+  `;
+}
+
 function syncSelection(type, visibleIds, selectAllId, barId, countId, emptyLabel) {
   const selected = state.selected[type];
   const selectedCount = selected.size;
@@ -1577,6 +1804,9 @@ function switchView(view) {
   const activeTab = $("activeTab");
   if (activeTab) activeTab.textContent = titles[nextView][0];
   renderQuickActions(nextView);
+  if (nextView === "gallery" && state.user?.role === "admin" && !state.gallery.images.length) {
+    loadGallery().catch((error) => toast(error.message, "error"));
+  }
   const searchId = searchTargets[nextView];
   $("globalSearch").value = searchId ? $(searchId).value : "";
   $("globalSearch").placeholder = searchId ? `搜索${titles[nextView][0]}` : "搜索当前页面";
@@ -1740,12 +1970,22 @@ document.addEventListener("click", async (event) => {
     const id = detailTarget.dataset.id;
     if (type === "gateway") showGatewayDetail(id);
     if (type === "job") showJobDetail(id);
+    if (type === "gallery") showGalleryDetail(id);
   }
   if (event.target.closest("[data-action='reload']")) {
     const button = event.target.closest("[data-action='reload']");
     try {
       await withBusy(button, "刷新中", loadAll);
       toast("已刷新", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (event.target.closest("[data-action='reload-gallery']")) {
+    const button = event.target.closest("[data-action='reload-gallery']");
+    try {
+      await withBusy(button, "刷新中", () => loadGallery());
+      toast("作品看板已刷新", "success");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1766,7 +2006,10 @@ $("usageDaysTabs").addEventListener("click", async (e) => {
   } catch (err) { toast(err.message, "error"); }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeDrawer();
+  if (event.key === "Escape") {
+    closeDrawer();
+    closeCreatedCodesPopover();
+  }
   if (event.key === "/" && !event.metaKey && !event.ctrlKey) {
     const active = document.activeElement;
     const editing = active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
@@ -1885,6 +2128,38 @@ $("gatewayRows").addEventListener("click", async (event) => {
   }
 });
 
+$("callSquareForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = event.submitter;
+  try {
+    await withBusy(button, "测试中", async () => {
+      const data = formData(form);
+      data.url = String(data.url || "").trim();
+      data.apiKey = String(data.apiKey || "").trim();
+      data.model = String(data.model || "").trim();
+      validateGatewayPayload({ baseUrl: data.url, apiKey: data.apiKey });
+      if (!data.model) throw new Error("Model 不能为空");
+      const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(data) });
+      renderCallSquareResult(result);
+      toast(result.ok ? "测试通过" : (result.error || "测试失败"), result.ok ? "success" : "error");
+    });
+  } catch (error) {
+    renderCallSquareResult({
+      ok: false,
+      status: 0,
+      latencyMs: 0,
+      model: form.elements.model?.value || "",
+      modelFound: false,
+      models: [],
+      error: error.message,
+      url: form.elements.url?.value || "",
+      rawPreview: "",
+    });
+    toast(error.message, "error");
+  }
+});
+
 $("userForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1963,6 +2238,43 @@ $("userRows").addEventListener("input", (event) => {
   const field = event.target.closest("[data-field]");
   if (!field) return;
   captureRowDraft("users", field);
+});
+
+$("galleryGrid").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-action='detail-gallery-image']");
+  if (!button) return;
+  const card = button.closest(".gallery-card");
+  if (card) showGalleryDetail(card.dataset.id);
+});
+
+$("galleryPrevPage").addEventListener("click", async () => {
+  if (state.gallery.offset <= 0) return;
+  state.gallery.offset = Math.max(0, state.gallery.offset - state.gallery.limit);
+  try {
+    await loadGallery();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("galleryNextPage").addEventListener("click", async () => {
+  if (state.gallery.page >= state.gallery.pageCount) return;
+  state.gallery.offset += state.gallery.limit;
+  try {
+    await loadGallery();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("galleryPageSize").addEventListener("change", async (event) => {
+  state.gallery.limit = Number(event.target.value || 500);
+  state.gallery.offset = 0;
+  try {
+    await loadGallery();
+  } catch (error) {
+    toast(error.message, "error");
+  }
 });
 
 $("userSelectAll").addEventListener("change", (event) => {
@@ -2091,7 +2403,17 @@ $("drawerBody").addEventListener("click", async (event) => {
 
     if (action === "detail-job") {
       const jobId = drawerButton.dataset.jobId;
-      if (jobId) showJobDetail(jobId);
+      if (jobId) {
+        const existingJob = state.jobs.find((item) => item.id === jobId);
+        if (existingJob) showJobDetail(jobId);
+        else {
+          switchView("jobs");
+          $("jobSearch").value = jobId;
+          $("globalSearch").value = jobId;
+          renderJobs();
+          toast("已切到任务页，请在当前列表中查看关联任务", "info");
+        }
+      }
       return;
     }
 
@@ -2300,8 +2622,32 @@ $("codeForm").addEventListener("submit", async (event) => {
         maxUses: created[0].maxUses,
       });
       rerenderAfterMutation();
+      showCreatedCodesPopover(created);
     });
-    toast("兑换码已生成", "success");
+    toast("兑换码已生成，可复制本次创建", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("closeCodeBatchPopover").addEventListener("click", closeCreatedCodesPopover);
+$("codeBatchScrim").addEventListener("click", closeCreatedCodesPopover);
+
+$("copyCreatedCodes").addEventListener("click", async (event) => {
+  try {
+    if (!state.lastCreatedCodes.length) throw new Error("没有可复制的本次创建兑换码");
+    await withBusy(event.currentTarget, "复制中", () => copyText(codeBatchText(false)));
+    toast(`已复制 ${state.lastCreatedCodes.length} 个兑换码`, "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("copyCreatedCodesCsv").addEventListener("click", async (event) => {
+  try {
+    if (!state.lastCreatedCodes.length) throw new Error("没有可复制的本次创建兑换码");
+    await withBusy(event.currentTarget, "复制中", () => copyText(codeBatchText(true)));
+    toast(`已复制 ${state.lastCreatedCodes.length} 个兑换码明细`, "success");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2390,6 +2736,8 @@ bindFilter("gatewayProviderFilter", renderGateways);
 bindFilter("userSearch", renderUsers);
 bindFilter("jobSearch", renderJobs);
 bindFilter("jobStatusFilter", renderJobs);
+bindFilter("gallerySearch", renderGallery);
+bindFilter("galleryStatusFilter", renderGallery);
 bindFilter("riskSearch", renderRiskAlerts);
 bindFilter("riskStatusFilter", renderRiskAlerts);
 bindFilter("ruleSearch", renderSensitiveRules);

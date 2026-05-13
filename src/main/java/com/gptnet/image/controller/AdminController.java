@@ -1,6 +1,7 @@
 package com.gptnet.image.controller;
 
 import com.gptnet.image.dto.AdminDtos.AdminCreateUserRequest;
+import com.gptnet.image.dto.AdminDtos.CallSquareTestRequest;
 import com.gptnet.image.dto.AdminDtos.CreditsRequest;
 import com.gptnet.image.dto.AdminDtos.GatewayRequest;
 import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
@@ -110,10 +111,26 @@ public class AdminController {
     return admin.healthAll(actor, request);
   }
 
+  @PostMapping("/call-square/test")
+  public Map<String, Object> callSquareTest(HttpServletRequest request, @Valid @RequestBody CallSquareTestRequest body) {
+    User actor = requireAdmin(request);
+    return admin.callSquareTest(actor, request, body);
+  }
+
   @GetMapping("/jobs")
   public Map<String, Object> jobs(HttpServletRequest request, @RequestParam(value = "limit", defaultValue = "100") int limit) {
     requireAdmin(request);
     return admin.jobs(limit);
+  }
+
+  @GetMapping("/gallery")
+  public Map<String, Object> gallery(
+    HttpServletRequest request,
+    @RequestParam(value = "limit", defaultValue = "500") int limit,
+    @RequestParam(value = "offset", defaultValue = "0") int offset
+  ) {
+    requireAdmin(request);
+    return admin.gallery(limit, offset);
   }
 
   @GetMapping("/audit-logs")

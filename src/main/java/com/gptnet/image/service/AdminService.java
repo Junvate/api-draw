@@ -1,6 +1,7 @@
 package com.gptnet.image.service;
 
 import com.gptnet.image.dto.AdminDtos.AdminCreateUserRequest;
+import com.gptnet.image.dto.AdminDtos.CallSquareTestRequest;
 import com.gptnet.image.dto.AdminDtos.CreditsRequest;
 import com.gptnet.image.dto.AdminDtos.GatewayRequest;
 import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -333,6 +335,69 @@ public class AdminService {
     return Maps.of("results", results);
   }
 
+  public Map<String, Object> callSquareTest(User actor, HttpServletRequest request, CallSquareTestRequest body) {
+    String baseUrl = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
+    String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
+    String model = Optional.ofNullable(body.getModel()).orElse("").trim();
+    if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
+    if (!baseUrl.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
+    if (apiKey.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "API Key 不能为空");
+    if (apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
+    if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
+
+    String requestUrl = imageService.upstreamUrl(baseUrl, "/models");
+    long started = System.currentTimeMillis();
+    try {
+      var response = upstream.json(requestUrl, "GET", Map.of("Authorization", "Bearer " + apiKey), null, 15000);
+      int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
+      List<String> models = modelIds(response.payload()).limit(60).toList();
+      boolean modelFound = models.stream().anyMatch(item -> item.equals(model));
+      String error = response.ok() ? null : upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status());
+      Map<String, Object> result = Maps.of(
+        "ok", response.ok(),
+        "status", response.status(),
+        "latencyMs", latencyMs,
+        "url", requestUrl,
+        "model", model,
+        "modelFound", modelFound,
+        "models", models,
+        "error", error,
+        "rawPreview", truncate(response.text(), 2400)
+      );
+      audit(actor, request, "call_square.test", model, Maps.of(
+        "ok", response.ok(),
+        "status", response.status(),
+        "latencyMs", latencyMs,
+        "url", safeEndpointForAudit(baseUrl),
+        "model", model,
+        "modelFound", modelFound
+      ));
+      return result;
+    } catch (Exception exception) {
+      int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
+      String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
+      audit(actor, request, "call_square.test", model, Maps.of(
+        "ok", false,
+        "status", 0,
+        "latencyMs", latencyMs,
+        "url", safeEndpointForAudit(baseUrl),
+        "model", model,
+        "error", truncate(message, 500)
+      ));
+      return Maps.of(
+        "ok", false,
+        "status", 0,
+        "latencyMs", latencyMs,
+        "url", requestUrl,
+        "model", model,
+        "modelFound", false,
+        "models", List.of(),
+        "error", message,
+        "rawPreview", ""
+      );
+    }
+  }
+
   public Map<String, Object> jobs(int rawLimit) {
     int limit = Math.min(Math.max(rawLimit, 1), 500);
     List<ImageTask> tasks = db.recentTasks(limit).stream().map(db::hydrateTask).toList();
@@ -369,6 +434,91 @@ public class AdminService {
       );
       return item;
     }).toList());
+  }
+
+  public Map<String, Object> gallery(int rawLimit, int rawOffset) {
+    int limit = Math.min(Math.max(rawLimit, 1), 500);
+    int maxItems = 3000;
+    Integer totalValue = db.jdbc().queryForObject("""
+      SELECT COUNT(*)
+      FROM "ImageResult" r
+      JOIN "ImageTask" t ON t."id" = r."taskId"
+      """, Map.of(), Integer.class);
+    int total = Math.min(totalValue == null ? 0 : totalValue, maxItems);
+    int maxOffset = total == 0 ? 0 : ((total - 1) / limit) * limit;
+    int offset = Math.min(Math.max(rawOffset, 0), maxOffset);
+    List<Map<String, Object>> images = db.jdbc().query("""
+      SELECT
+        r."id",
+        r."taskId",
+        r."url",
+        r."thumbnailUrl",
+        r."storageKey",
+        r."width",
+        r."height",
+        r."format",
+        r."sizeBytes",
+        r."hash",
+        r."createdAt",
+        t."userId",
+        t."apiKeyId",
+        t."gatewayId",
+        t."requestId",
+        t."model",
+        t."prompt",
+        t."size",
+        t."quality",
+        t."imageCount",
+        t."status",
+        t."costCredits",
+        t."latencyMs",
+        t."createdAt" AS "taskCreatedAt",
+        t."finishedAt" AS "taskFinishedAt",
+        u."email" AS "userEmail",
+        u."name" AS "userName"
+      FROM "ImageResult" r
+      JOIN "ImageTask" t ON t."id" = r."taskId"
+      LEFT JOIN "User" u ON u."id" = t."userId"
+      ORDER BY r."createdAt" DESC, r."id" DESC
+      LIMIT :limit OFFSET :offset
+      """, Map.of("limit", limit, "offset", offset), (rs, rowNum) -> Maps.of(
+        "id", rs.getString("id"),
+        "taskId", rs.getString("taskId"),
+        "url", rs.getString("url"),
+        "thumbnailUrl", rs.getString("thumbnailUrl"),
+        "storageKey", rs.getString("storageKey"),
+        "width", db.integer(rs, "width"),
+        "height", db.integer(rs, "height"),
+        "format", rs.getString("format"),
+        "sizeBytes", db.integer(rs, "sizeBytes"),
+        "hash", rs.getString("hash"),
+        "createdAt", db.instant(rs, "createdAt"),
+        "userId", rs.getString("userId"),
+        "apiKeyId", rs.getString("apiKeyId"),
+        "gatewayId", rs.getString("gatewayId"),
+        "requestId", rs.getString("requestId"),
+        "model", rs.getString("model"),
+        "prompt", rs.getString("prompt"),
+        "size", rs.getString("size"),
+        "quality", rs.getString("quality"),
+        "imageCount", rs.getInt("imageCount"),
+        "status", adminStatus(rs.getString("status")),
+        "costCredits", rs.getInt("costCredits"),
+        "latencyMs", db.integer(rs, "latencyMs"),
+        "taskCreatedAt", db.instant(rs, "taskCreatedAt"),
+        "taskFinishedAt", db.instant(rs, "taskFinishedAt"),
+        "userEmail", rs.getString("userEmail"),
+        "userName", rs.getString("userName")
+      ));
+    return Maps.of(
+      "images", images,
+      "limit", limit,
+      "offset", offset,
+      "total", total,
+      "maxItems", maxItems,
+      "page", total == 0 ? 0 : (offset / limit) + 1,
+      "pageCount", total == 0 ? 0 : (int) Math.ceil(total / (double) limit)
+    );
   }
 
   public Map<String, Object> auditLogs(int rawLimit) {
@@ -614,6 +764,34 @@ public class AdminService {
     if (value == null) return null;
     String trimmed = value.trim();
     return trimmed.isBlank() ? null : trimmed;
+  }
+
+  private String firstNonBlank(String first, String second) {
+    if (first != null && !first.isBlank()) return first;
+    return Optional.ofNullable(second).orElse("");
+  }
+
+  private String safeEndpointForAudit(String value) {
+    if (value == null) return "";
+    int queryStart = value.indexOf('?');
+    return queryStart >= 0 ? value.substring(0, queryStart) : value;
+  }
+
+  private Stream<String> modelIds(Map<String, Object> payload) {
+    Object data = payload.get("data");
+    if (data instanceof List<?> list) {
+      return list.stream()
+        .map(item -> {
+          if (item instanceof Map<?, ?> map && map.get("id") != null) return String.valueOf(map.get("id"));
+          return null;
+        })
+        .filter(item -> item != null && !item.isBlank());
+    }
+    Object models = payload.get("models");
+    if (models instanceof List<?> list) {
+      return list.stream().map(String::valueOf).filter(item -> !item.isBlank());
+    }
+    return Stream.empty();
   }
 
   private Object jsonValue(String raw) {
