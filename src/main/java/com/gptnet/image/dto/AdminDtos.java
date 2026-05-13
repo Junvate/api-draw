@@ -148,4 +148,30 @@ public final class AdminDtos {
     public Boolean getActive() { return active; }
     public void setActive(Boolean active) { this.active = active; }
   }
+
+  public static class SensitiveWordRulesRequest {
+    @Size(max = 1_000_000)
+    private String patterns;
+    private Boolean replace;
+
+    public String getPatterns() { return patterns; }
+    public void setPatterns(String patterns) { this.patterns = patterns; }
+    public Boolean getReplace() { return replace; }
+    public void setReplace(Boolean replace) { this.replace = replace; }
+  }
+
+  public static class SensitiveWordRulePatchRequest {
+    @Size(max = 120)
+    private String name;
+    @Size(max = 1000)
+    private String pattern;
+    private Boolean enabled;
+
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getPattern() { return pattern; }
+    public void setPattern(String pattern) { this.pattern = pattern; }
+    public Boolean getEnabled() { return enabled; }
+    public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+  }
 }

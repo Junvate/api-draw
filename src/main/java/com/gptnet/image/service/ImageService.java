@@ -37,6 +37,7 @@ public class ImageService {
   private final UpstreamClient upstream;
   private final QueueService queue;
   private final StorageService storage;
+  private final SensitiveWordService sensitiveWords;
   private final String storageRoot;
   private final int failureThreshold;
   private final long cooldownMs;
@@ -48,6 +49,7 @@ public class ImageService {
     UpstreamClient upstream,
     QueueService queue,
     StorageService storage,
+    SensitiveWordService sensitiveWords,
     @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot,
     @Value("${GATEWAY_FAILURE_THRESHOLD:30}") int failureThreshold,
     @Value("${GATEWAY_COOLDOWN_MS:300000}") long cooldownMs
@@ -58,6 +60,7 @@ public class ImageService {
     this.upstream = upstream;
     this.queue = queue;
     this.storage = storage;
+    this.sensitiveWords = sensitiveWords;
     this.storageRoot = storageRoot;
     this.failureThreshold = failureThreshold;
     this.cooldownMs = cooldownMs;
@@ -105,6 +108,7 @@ public class ImageService {
     String prompt = cleanFormString(params.dto().getPrompt()).trim();
     if (prompt.length() < 4) throw AppException.badRequest("PROMPT_TOO_SHORT", "提示词至少输入 4 个字");
     if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
+    sensitiveWords.assertAllowed(params.userId(), params.apiKeyId(), params.requestId(), prompt);
     String requestedModel = Optional.of(cleanFormString(params.dto().getModel())).filter(s -> !s.isBlank()).orElse("gpt-image-2");
     String requestedQuality = cleanFormString(params.dto().getQuality());
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);

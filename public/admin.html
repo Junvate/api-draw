@@ -26,6 +26,7 @@
           <button data-view="users" type="button"><span class="nav-icon">●</span><span>用户管理</span><small id="navUserCount">-</small></button>
           <button data-view="jobs" type="button"><span class="nav-icon">☰</span><span>任务管理</span><small id="navJobCount">-</small></button>
           <span class="nav-label">系统管理</span>
+          <button data-view="risk" type="button"><span class="nav-icon">!</span><span>敏感词风控</span><small id="navRiskCount">-</small></button>
           <button data-view="codes" type="button"><span class="nav-icon">▤</span><span>兑换码</span><small id="navCodeCount">-</small></button>
           <button data-view="audit" type="button"><span class="nav-icon">⚑</span><span>审计日志</span><small id="navAuditCount">-</small></button>
           <button data-view="settings" type="button"><span class="nav-icon">⚙</span><span>站点设置</span><small></small></button>
@@ -341,6 +342,80 @@
             </section>
           </section>
 
+          <section class="view" data-panel="risk">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>敏感词风控</h2>
+                  <p>批量配置正则规则，命中后禁止生成并记录告警</p>
+                </div>
+                <button data-action="reload" type="button">刷新</button>
+              </div>
+              <div class="section-stats" id="riskStats"></div>
+              <div class="risk-layout">
+                <section class="risk-config">
+                  <div class="risk-section-title">
+                    <strong>规则导入</strong>
+                    <span>每行一条 Java 正则，空行和 # 开头的行会被忽略</span>
+                  </div>
+                  <form id="sensitiveWordForm" class="risk-form">
+                    <textarea id="sensitiveWordPatterns" name="patterns" rows="9" placeholder="示例：&#10;违禁词A|违禁词B&#10;(?i)forbidden\s+phrase&#10;敏感.{0,8}内容"></textarea>
+                    <label class="risk-checkbox">
+                      <input id="sensitiveWordReplace" type="checkbox" />
+                      <span>导入前停用旧规则</span>
+                    </label>
+                    <div class="risk-actions">
+                      <button class="primary" type="submit">保存规则</button>
+                      <button id="clearSensitiveWordInput" type="button">清空</button>
+                    </div>
+                  </form>
+                </section>
+                <section class="risk-alerts">
+                  <div class="risk-section-title">
+                    <strong>最新告警</strong>
+                    <span>记录命中的用户、输入内容和请求标识</span>
+                  </div>
+                  <div class="toolbar risk-toolbar">
+                    <input id="riskSearch" placeholder="搜索用户、规则、命中内容、提示词" />
+                    <select id="riskStatusFilter">
+                      <option value="">全部告警</option>
+                      <option value="open">待处理</option>
+                    </select>
+                  </div>
+                  <div class="table-wrap risk-alert-wrap">
+                    <table class="data-table risk-alert-table">
+                      <thead><tr><th>时间</th><th>用户</th><th>命中</th><th>提示词</th><th>来源</th><th>操作</th></tr></thead>
+                      <tbody id="riskAlertRows"></tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>规则列表</h2>
+                  <p>支持逐条启停、编辑和删除</p>
+                </div>
+              </div>
+              <div class="toolbar risk-toolbar">
+                <input id="ruleSearch" placeholder="搜索正则、名称、ID" />
+                <select id="ruleStatusFilter">
+                  <option value="">全部规则</option>
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+              </div>
+              <div class="table-wrap">
+                <table class="data-table risk-rule-table">
+                  <thead><tr><th>规则</th><th>状态</th><th>命中次数</th><th>最近命中</th><th>更新时间</th><th>操作</th></tr></thead>
+                  <tbody id="sensitiveWordRows"></tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+
           <section class="view" data-panel="codes">
             <section class="panel">
               <div class="panel-head">
@@ -437,6 +512,14 @@
         </section>
       </main>
     </div>
+    <div class="mobile-nav-scrim hidden" id="mobileNavScrim"></div>
+    <nav class="mobile-dock" id="mobileDock" aria-label="移动端快捷导航">
+      <button data-mobile-view="overview" type="button"><span>▣</span><small>首页</small></button>
+      <button data-mobile-view="channels" type="button"><span>◈</span><small>渠道</small></button>
+      <button data-mobile-view="jobs" type="button"><span>☰</span><small>任务</small></button>
+      <button data-mobile-view="risk" type="button"><span>!</span><small>风控</small></button>
+      <button data-mobile-menu type="button"><span>◎</span><small>更多</small></button>
+    </nav>
     <div class="drawer-scrim hidden" id="drawerScrim"></div>
     <aside class="detail-drawer hidden" id="detailDrawer" aria-hidden="true">
       <div class="drawer-head">

@@ -5,9 +5,13 @@ import com.gptnet.image.dto.AdminDtos.CreditsRequest;
 import com.gptnet.image.dto.AdminDtos.GatewayRequest;
 import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
 import com.gptnet.image.dto.AdminDtos.RedemptionCodeRequest;
+import com.gptnet.image.dto.AdminDtos.SensitiveWordRulePatchRequest;
+import com.gptnet.image.dto.AdminDtos.SensitiveWordRulesRequest;
 import com.gptnet.image.model.User;
 import com.gptnet.image.service.AdminService;
 import com.gptnet.image.service.AuthService;
+import com.gptnet.image.service.SensitiveWordService;
+import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.Map;
@@ -26,10 +30,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminController {
   private final AuthService auth;
   private final AdminService admin;
+  private final SensitiveWordService sensitiveWords;
 
-  public AdminController(AuthService auth, AdminService admin) {
+  public AdminController(AuthService auth, AdminService admin, SensitiveWordService sensitiveWords) {
     this.auth = auth;
     this.admin = admin;
+    this.sensitiveWords = sensitiveWords;
   }
 
   @GetMapping("/summary")
@@ -144,6 +150,44 @@ public class AdminController {
   public Map<String, Object> patchSettings(HttpServletRequest request, @RequestBody Map<String, String> body) {
     requireAdmin(request);
     return admin.patchSettings(body);
+  }
+
+  @GetMapping("/sensitive-words")
+  public Map<String, Object> sensitiveWordRules(HttpServletRequest request) {
+    requireAdmin(request);
+    return sensitiveWords.rules();
+  }
+
+  @PostMapping("/sensitive-words")
+  public Map<String, Object> configureSensitiveWordRules(HttpServletRequest request, @Valid @RequestBody SensitiveWordRulesRequest body) {
+    User actor = requireAdmin(request);
+    Map<String, Object> result = sensitiveWords.batchConfigure(actor.id(), body.getPatterns(), Boolean.TRUE.equals(body.getReplace()));
+    admin.audit(actor, request, "risk.sensitive_words.configure", "sensitive_words",
+      Maps.of("imported", result.get("imported"), "replace", result.get("replace")));
+    return result;
+  }
+
+  @PatchMapping("/sensitive-words/{id}")
+  public Map<String, Object> patchSensitiveWordRule(HttpServletRequest request, @PathVariable String id, @Valid @RequestBody SensitiveWordRulePatchRequest body) {
+    User actor = requireAdmin(request);
+    Map<String, Object> result = sensitiveWords.patchRule(id, body.getName(), body.getPattern(), body.getEnabled());
+    admin.audit(actor, request, "risk.sensitive_word.update", id,
+      Maps.of("name", body.getName(), "pattern", body.getPattern(), "enabled", body.getEnabled()));
+    return result;
+  }
+
+  @DeleteMapping("/sensitive-words/{id}")
+  public Map<String, Object> deleteSensitiveWordRule(HttpServletRequest request, @PathVariable String id) {
+    User actor = requireAdmin(request);
+    Map<String, Object> result = sensitiveWords.deleteRule(id);
+    admin.audit(actor, request, "risk.sensitive_word.delete", id, Map.of());
+    return result;
+  }
+
+  @GetMapping("/risk-alerts")
+  public Map<String, Object> riskAlerts(HttpServletRequest request, @RequestParam(value = "limit", defaultValue = "100") int limit) {
+    requireAdmin(request);
+    return sensitiveWords.alerts(limit);
   }
 
   private User requireAdmin(HttpServletRequest request) {

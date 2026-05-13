@@ -3706,3 +3706,74 @@ main {
     color: transparent;
   }
 }
+
+/* Compliance notice */
+.compliance-section {
+  width: min(1240px, calc(100% - 48px));
+  margin: clamp(72px, 8vw, 128px) auto 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.58fr) minmax(0, 1fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: start;
+  padding-top: clamp(30px, 4vw, 58px);
+  border-top: 1px solid rgba(7, 7, 7, 0.12);
+}
+
+.compliance-heading span {
+  display: block;
+  color: rgba(7, 7, 7, 0.56);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.compliance-heading h2 {
+  margin: 14px 0 0;
+  font-family: "DesignFeature", "DesignGT", sans-serif;
+  font-size: clamp(36px, 4vw, 68px);
+  font-weight: 400;
+  line-height: 0.96;
+  letter-spacing: -0.065em;
+  color: #000000;
+}
+
+.compliance-body {
+  display: grid;
+  gap: 18px;
+  max-width: 820px;
+  justify-self: end;
+}
+
+.compliance-body p {
+  margin: 0;
+  color: #3f3a34;
+  font-size: clamp(15.5px, 1.08vw, 18px);
+  line-height: 1.85;
+}
+
+@media (max-width: 760px) {
+  .compliance-section {
+    width: min(100%, calc(100vw - 24px));
+    max-width: 100%;
+    grid-template-columns: 1fr;
+    gap: 24px;
+    margin-top: 72px;
+    overflow-x: hidden;
+  }
+
+  .compliance-heading h2 {
+    font-family: "DesignGT", "Fira Sans", "PingFang SC", sans-serif;
+    font-size: clamp(30px, 8.8vw, 38px);
+    font-weight: 700;
+    line-height: 1.06;
+    letter-spacing: -0.045em;
+  }
+
+  .compliance-body {
+    justify-self: stretch;
+  }
+
+  .compliance-body p {
+    font-size: 15px;
+    line-height: 1.78;
+  }
+}

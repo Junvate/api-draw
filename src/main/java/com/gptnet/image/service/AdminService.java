@@ -55,6 +55,8 @@ public class AdminService {
     int activeGateways = count("Gateway", "\"enabled\" = true");
     Integer issued = db.jdbc().queryForObject("SELECT COALESCE(SUM(\"amount\"), 0) FROM \"WalletEntry\" WHERE \"amount\" > 0", Map.of(), Integer.class);
     Integer spent = db.jdbc().queryForObject("SELECT COALESCE(SUM(\"amount\"), 0) FROM \"WalletEntry\" WHERE \"amount\" < 0", Map.of(), Integer.class);
+    Map<String, Object> successRate24h = successRate(java.sql.Timestamp.from(Instant.now().minusSeconds(24 * 60 * 60L)));
+    Map<String, Object> successRateAll = successRate(null);
     return Maps.of(
       "users", users,
       "orders", orders,
@@ -63,7 +65,32 @@ public class AdminService {
       "activeGateways", activeGateways,
       "creditIssued", issued == null ? 0 : issued,
       "creditSpent", Math.abs(spent == null ? 0 : spent),
+      "successRates", Maps.of("24h", successRate24h, "all", successRateAll),
       "gateways", db.gateways()
+    );
+  }
+
+  private Map<String, Object> successRate(java.sql.Timestamp since) {
+    String where = since == null ? "" : "WHERE \"createdAt\" >= :since";
+    Map<String, ?> params = since == null ? Map.of() : Map.of("since", since);
+    Map<String, Object> counts = db.jdbc().queryForObject("""
+      SELECT
+        COUNT(*) FILTER (WHERE "status" IN ('success'::"ImageTaskStatus", 'failed'::"ImageTaskStatus")) AS "completed",
+        COUNT(*) FILTER (WHERE "status" = 'success'::"ImageTaskStatus") AS "succeeded",
+        COUNT(*) FILTER (WHERE "status" = 'failed'::"ImageTaskStatus") AS "failed"
+      FROM "ImageTask"
+      """ + where, params, (rs, rowNum) -> Maps.of(
+        "completed", rs.getLong("completed"),
+        "succeeded", rs.getLong("succeeded"),
+        "failed", rs.getLong("failed")
+      ));
+    long completed = ((Number) counts.get("completed")).longValue();
+    long succeeded = ((Number) counts.get("succeeded")).longValue();
+    return Maps.of(
+      "completed", completed,
+      "succeeded", succeeded,
+      "failed", ((Number) counts.get("failed")).longValue(),
+      "rate", completed == 0 ? 0 : Math.round((succeeded * 100.0) / completed)
     );
   }
 

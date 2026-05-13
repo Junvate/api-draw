@@ -3,6 +3,7 @@ const STORAGE_KEYS = {
   view: "admin-active-view",
   sidebarCollapsed: "admin-sidebar-collapsed",
   autoRefresh: "admin-auto-refresh",
+  successRateScope: "admin-success-rate-scope",
 };
 
 const AUTO_REFRESH_MS = 30000;
@@ -18,6 +19,8 @@ const state = {
   codes: [],
   jobs: [],
   logs: [],
+  sensitiveRules: [],
+  riskAlerts: [],
   selected: {
     gateways: new Set(),
     users: new Set(),
@@ -28,6 +31,7 @@ const state = {
   },
   density: localStorage.getItem(STORAGE_KEYS.density) || "comfortable",
   view: localStorage.getItem(STORAGE_KEYS.view) || "channels",
+  successRateScope: localStorage.getItem(STORAGE_KEYS.successRateScope) || "24h",
   sidebarCollapsed: localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === "1",
   autoRefresh: localStorage.getItem(STORAGE_KEYS.autoRefresh) !== "off",
   refreshTimer: null,
@@ -47,6 +51,7 @@ const titles = {
   channels: ["上游渠道", "每个渠道代表一个上游入口或中转站"],
   users: ["用户", "账号状态与积分"],
   jobs: ["任务", "最近 100 条绘图请求"],
+  risk: ["敏感词风控", "正则规则、拦截记录和用户告警"],
   codes: ["兑换码", "积分兑换和活动发放"],
   audit: ["审计", "最近 100 条操作记录"],
   system: ["系统", "运行探针、指标和 OpenAPI"],
@@ -57,6 +62,7 @@ const searchTargets = {
   channels: "gatewaySearch",
   users: "userSearch",
   jobs: "jobSearch",
+  risk: "riskSearch",
   codes: "codeSearch",
   audit: "auditSearch",
 };
@@ -76,6 +82,7 @@ const renderers = {
   channels: renderGateways,
   users: renderUsers,
   jobs: renderJobs,
+  risk: renderRisk,
   codes: renderCodes,
   audit: renderAudit,
 };
@@ -99,6 +106,11 @@ const quickActions = {
     ["jobs-running", "处理中", "filter", "jobStatusFilter:running"],
     ["jobs-failed", "失败任务", "filter", "jobStatusFilter:failed", "danger"],
     ["system", "队列状态", "view", "system"],
+  ],
+  risk: [
+    ["risk-import", "批量导入规则", "focus", "sensitiveWordPatterns", "primary"],
+    ["risk-alerts", "查看最新告警", "focus", "riskSearch"],
+    ["audit", "查看审计", "view", "audit"],
   ],
   codes: [
     ["code-create", "创建兑换码", "open", "codeCreateBox", "primary"],
@@ -349,9 +361,21 @@ function applyShellState() {
   document.body.classList.toggle("admin-sidebar-collapsed", state.sidebarCollapsed);
   const button = document.querySelector(".menu-button");
   if (!button) return;
-  button.textContent = state.sidebarCollapsed ? "→" : "☰";
+  const mobile = window.matchMedia("(max-width: 760px)").matches;
+  button.textContent = mobile ? "☰" : (state.sidebarCollapsed ? "→" : "☰");
   button.setAttribute("aria-label", state.sidebarCollapsed ? "展开侧边栏" : "收起侧边栏");
   button.setAttribute("title", state.sidebarCollapsed ? "展开侧边栏" : "收起侧边栏");
+}
+
+function setMobileNavOpen(open) {
+  document.body.classList.toggle("mobile-nav-open", open);
+  $("mobileNavScrim")?.classList.toggle("hidden", !open);
+}
+
+function syncMobileDock(view = activeView()) {
+  $$("#mobileDock [data-mobile-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mobileView === view);
+  });
 }
 
 function stopAutoRefresh() {
@@ -545,6 +569,8 @@ function clearAdminData() {
   state.codes = [];
   state.jobs = [];
   state.logs = [];
+  state.sensitiveRules = [];
+  state.riskAlerts = [];
   state.selected.gateways.clear();
   state.selected.users.clear();
   state.drafts.gateways = {};
@@ -558,6 +584,7 @@ function clearAdminData() {
     "navChannelCount",
     "navUserCount",
     "navJobCount",
+    "navRiskCount",
     "navCodeCount",
     "navAuditCount",
     "navSystemCount",
@@ -634,7 +661,7 @@ async function loadAll() {
   state.loadingAll = true;
   state.lastLoadPromise = (async () => {
     try {
-      const [summary, usage, users, gateways, codes, jobs, logs, ready] = await Promise.all([
+      const [summary, usage, users, gateways, codes, jobs, logs, sensitiveRules, riskAlerts, ready] = await Promise.all([
         api("/api/admin/summary"),
         api("/api/admin/usage?days=" + state.usageDays),
         api("/api/admin/users"),
@@ -642,6 +669,8 @@ async function loadAll() {
         api("/api/admin/redemption-codes"),
         api("/api/admin/jobs"),
         api("/api/admin/audit-logs"),
+        api("/api/admin/sensitive-words"),
+        api("/api/admin/risk-alerts"),
         api("/api/ready"),
       ]);
       state.summary = summary;
@@ -651,6 +680,8 @@ async function loadAll() {
       state.codes = codes.codes;
       state.jobs = jobs.jobs;
       state.logs = logs.logs;
+      state.sensitiveRules = sensitiveRules.rules;
+      state.riskAlerts = riskAlerts.alerts;
       state.ready = ready;
       pruneSelections();
       pruneDrafts();
@@ -695,6 +726,7 @@ function renderAll() {
   renderGateways();
   renderUsers();
   renderJobs();
+  renderRisk();
   renderCodes();
   renderAudit();
 }
@@ -704,10 +736,12 @@ function renderNavCounts() {
   const activeUsers = state.users.filter((user) => user.status === "active").length;
   const openJobs = state.jobs.filter((job) => ["queued", "running"].includes(job.status)).length;
   const activeCodes = state.codes.filter((code) => code.active).length;
+  const openRiskAlerts = state.riskAlerts.filter((alert) => alert.status === "open").length;
   $("navOverviewCount").textContent = `${state.jobs.length}`;
   $("navChannelCount").textContent = `${activeGateways}/${state.gateways.length}`;
   $("navUserCount").textContent = `${activeUsers}/${state.users.length}`;
   $("navJobCount").textContent = openJobs ? `${openJobs} 待` : `${state.jobs.length}`;
+  $("navRiskCount").textContent = openRiskAlerts ? `${openRiskAlerts} 告警` : `${state.sensitiveRules.filter((rule) => rule.enabled).length} 规则`;
   $("navCodeCount").textContent = `${activeCodes}/${state.codes.length}`;
   $("navAuditCount").textContent = `${state.logs.length}`;
   $("navSystemCount").textContent = state.ready?.redis ? "Redis" : "本地";
@@ -716,19 +750,35 @@ function renderNavCounts() {
 function renderOverview() {
   const summary = state.summary || {};
   const todayJobs = state.jobs.filter((job) => isWithin(job.createdAt, 24));
-  const succeeded = state.jobs.filter((job) => job.status === "succeeded").length;
-  const failed = state.jobs.filter((job) => job.status === "failed").length;
   const activeGateways = state.gateways.filter((gateway) => gateway.enabled).length;
+  const successRates = summary.successRates || {};
+  const scope = state.successRateScope === "all" ? "all" : "24h";
+  const selectedRate = successRates[scope] || {};
+  const completed = Number(selectedRate.completed || 0);
+  const rate = Number(selectedRate.rate || 0);
+  const scopeLabel = scope === "24h" ? "24h" : "迄今";
   const metrics = [
     ["用户", summary.users || 0, `${state.users.filter((user) => user.status === "active").length} 个正常账号`],
     ["可用渠道", `${activeGateways}/${state.gateways.length}`, "按优先级调度"],
     ["今日任务", todayJobs.length, "过去 24 小时"],
-    ["成功率", `${percentage(succeeded, succeeded + failed)}%`, `${succeeded + failed} 个已完成任务`],
+    ["成功率", `${rate}%`, `${scopeLabel} · ${completed} 个已完成任务`, true],
     ["消耗积分", summary.creditSpent || 0, `累计发放 ${summary.creditIssued || 0}`],
     ["启用兑换码", state.codes.filter((code) => code.active).length, `${state.codes.length} 个库存`],
   ];
-  $("metricGrid").innerHTML = metrics.map(([label, value, hint]) => `
-    <div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(hint)}</small></div>
+  $("metricGrid").innerHTML = metrics.map(([label, value, hint, isSuccessRate]) => `
+    <div class="metric ${isSuccessRate ? "success-rate-metric" : ""}">
+      <div class="metric-label-row">
+        <span>${escapeHtml(label)}</span>
+        ${isSuccessRate ? `
+          <div class="metric-tabs" role="group" aria-label="成功率范围">
+            <button class="${scope === "24h" ? "active" : ""}" data-success-rate-scope="24h" type="button">24h</button>
+            <button class="${scope === "all" ? "active" : ""}" data-success-rate-scope="all" type="button">迄今</button>
+          </div>
+        ` : ""}
+      </div>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(hint)}</small>
+    </div>
   `).join("");
 
   renderOpsChecklist();
@@ -1088,6 +1138,93 @@ function renderJobs() {
   `).join("") || tableEmpty(8);
 }
 
+function renderRiskStats() {
+  const enabled = state.sensitiveRules.filter((rule) => rule.enabled).length;
+  const disabled = state.sensitiveRules.length - enabled;
+  const openAlerts = state.riskAlerts.filter((alert) => alert.status === "open").length;
+  const todayAlerts = state.riskAlerts.filter((alert) => isWithin(alert.createdAt, 24)).length;
+  $("riskStats").innerHTML = [
+    statCard("启用规则", `${enabled}/${state.sensitiveRules.length}`, disabled ? `${disabled} 条停用` : "当前生效"),
+    statCard("最新告警", state.riskAlerts.length, "最近列表范围"),
+    statCard("待处理", openAlerts, "需要管理员关注"),
+    statCard("今日命中", todayAlerts, "过去 24 小时"),
+  ].join("");
+}
+
+function filteredRiskAlerts() {
+  const search = $("riskSearch").value;
+  const status = $("riskStatusFilter").value;
+  return state.riskAlerts
+    .filter((alert) => !status || alert.status === status)
+    .filter((alert) => includesText(
+      search,
+      alert.id,
+      alert.userEmail,
+      alert.userName,
+      alert.userId,
+      alert.ruleName,
+      alert.rulePattern,
+      alert.matchedText,
+      alert.prompt,
+      alert.requestId,
+      alert.apiKeyPrefix,
+    ));
+}
+
+function filteredSensitiveRules() {
+  const search = $("ruleSearch").value;
+  const status = $("ruleStatusFilter").value;
+  return state.sensitiveRules
+    .filter((rule) => !status || (status === "enabled" ? rule.enabled : !rule.enabled))
+    .filter((rule) => includesText(search, rule.id, rule.name, rule.pattern));
+}
+
+function renderRiskAlerts() {
+  const rows = filteredRiskAlerts();
+  $("riskAlertRows").innerHTML = rows.map((alert) => `
+    <tr data-id="${escapeHtml(alert.id)}">
+      <td>${formatDate(alert.createdAt)}</td>
+      <td><div class="cell-stack"><strong>${escapeHtml(alert.userEmail || alert.userId)}</strong><small>${escapeHtml(alert.userName || alert.userId)}</small></div></td>
+      <td><div class="cell-stack"><strong>${escapeHtml(alert.matchedText || "-")}</strong><small>${escapeHtml(clip(alert.ruleName || alert.rulePattern, 48))}</small></div></td>
+      <td title="${escapeHtml(alert.prompt || "")}">${escapeHtml(clip(alert.prompt, 96))}</td>
+      <td><div class="cell-stack"><strong>${escapeHtml(alert.source || "-")}</strong><small>${escapeHtml(alert.requestId || alert.apiKeyPrefix || "")}</small></div></td>
+      <td><button class="small" data-action="detail-risk-alert" type="button">详情</button></td>
+    </tr>
+  `).join("") || tableEmpty(6);
+}
+
+function renderSensitiveRules() {
+  const rows = filteredSensitiveRules();
+  $("sensitiveWordRows").innerHTML = rows.map((rule) => `
+    <tr data-id="${escapeHtml(rule.id)}">
+      <td>
+        <div class="cell-stack risk-rule-cell">
+          <input data-field="rule-name" value="${escapeHtml(rule.name || "")}" placeholder="规则名称，可选" />
+          <textarea data-field="rule-pattern" rows="2" spellcheck="false">${escapeHtml(rule.pattern || "")}</textarea>
+          <small>${escapeHtml(rule.id)}</small>
+        </div>
+      </td>
+      <td>${statusBadge(rule.enabled ? "enabled" : "disabled")}</td>
+      <td>${Number(rule.alertCount || 0)}</td>
+      <td>${formatDate(rule.lastHitAt)}</td>
+      <td>${formatDate(rule.updatedAt)}</td>
+      <td>
+        <div class="row-actions">
+          <button class="small primary" data-action="save-sensitive-rule" type="button">保存</button>
+          <button class="small" data-action="toggle-sensitive-rule" type="button">${rule.enabled ? "停用" : "启用"}</button>
+          <button class="small danger" data-action="delete-sensitive-rule" type="button">删除</button>
+        </div>
+      </td>
+    </tr>
+  `).join("") || tableEmpty(6);
+}
+
+function renderRisk() {
+  renderRiskStats();
+  renderRiskAlerts();
+  renderSensitiveRules();
+}
+
 function renderCodeStats() {
   const active = state.codes.filter((code) => code.active).length;
   const totalCredits = state.codes.reduce((sum, code) => sum + Number(code.credits || 0) * Number(code.maxUses || 0), 0);
@@ -1324,6 +1461,38 @@ function showAuditDetail(id) {
   `);
 }
 
+function showRiskAlertDetail(id) {
+  const alert = state.riskAlerts.find((item) => item.id === id);
+  if (!alert) return;
+  openDrawer("敏感词告警", `${alert.userEmail || alert.userId} · ${formatDate(alert.createdAt)}`, `
+    <div class="detail-section">
+      <h3>告警</h3>
+      ${fieldRow("告警 ID", alert.id)}
+      ${fieldRow("状态", alert.status || "-")}
+      ${fieldRow("来源", alert.source || "-")}
+      ${fieldRow("时间", formatDate(alert.createdAt))}
+      ${fieldRow("Request ID", alert.requestId || "-")}
+      ${fieldRow("API Key", alert.apiKeyPrefix || alert.apiKeyId || "-")}
+    </div>
+    <div class="detail-section">
+      <h3>用户</h3>
+      ${fieldRow("用户", alert.userEmail || alert.userId)}
+      ${fieldRow("昵称", alert.userName || "-")}
+      ${fieldRow("用户 ID", alert.userId)}
+    </div>
+    <div class="detail-section">
+      <h3>命中规则</h3>
+      ${fieldRow("规则", alert.ruleName || alert.ruleId || "-")}
+      ${fieldRow("命中文本", alert.matchedText || "-")}
+      <pre class="json-block">${escapeHtml(alert.rulePattern || "")}</pre>
+    </div>
+    <div class="detail-section">
+      <h3>用户输入</h3>
+      <p class="prompt-box">${escapeHtml(alert.prompt || "-")}</p>
+    </div>
+  `);
+}
+
 function rowPatch(row) {
   const patch = {};
   $$("[data-field]", row).forEach((input) => {
@@ -1400,6 +1569,7 @@ function switchView(view) {
   state.view = nextView;
   localStorage.setItem(STORAGE_KEYS.view, nextView);
   closeDrawer();
+  setMobileNavOpen(false);
   $$("#nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === nextView));
   $$(".view").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === nextView));
   $("viewTitle").textContent = titles[nextView][0];
@@ -1410,6 +1580,7 @@ function switchView(view) {
   const searchId = searchTargets[nextView];
   $("globalSearch").value = searchId ? $(searchId).value : "";
   $("globalSearch").placeholder = searchId ? `搜索${titles[nextView][0]}` : "搜索当前页面";
+  syncMobileDock(nextView);
   if (nextView === "system") loadSystem().catch((error) => toast(error.message, "error"));
   if (nextView === "settings") loadSiteSettings();
 }
@@ -1500,12 +1671,42 @@ $("nav").addEventListener("click", (event) => {
 });
 
 document.querySelector(".menu-button")?.addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    setMobileNavOpen(!document.body.classList.contains("mobile-nav-open"));
+    return;
+  }
   state.sidebarCollapsed = !state.sidebarCollapsed;
   localStorage.setItem(STORAGE_KEYS.sidebarCollapsed, state.sidebarCollapsed ? "1" : "0");
   applyShellState();
 });
 
+$("mobileDock")?.addEventListener("click", (event) => {
+  const viewButton = event.target.closest("[data-mobile-view]");
+  if (viewButton) {
+    switchView(viewButton.dataset.mobileView);
+    return;
+  }
+  if (event.target.closest("[data-mobile-menu]")) {
+    setMobileNavOpen(true);
+  }
+});
+
+$("mobileNavScrim")?.addEventListener("click", () => setMobileNavOpen(false));
+
+window.addEventListener("resize", () => {
+  if (!window.matchMedia("(max-width: 760px)").matches) setMobileNavOpen(false);
+  applyShellState();
+});
+
 document.addEventListener("click", async (event) => {
+  const successScopeButton = event.target.closest("[data-success-rate-scope]");
+  if (successScopeButton) {
+    state.successRateScope = successScopeButton.dataset.successRateScope === "all" ? "all" : "24h";
+    localStorage.setItem(STORAGE_KEYS.successRateScope, state.successRateScope);
+    renderOverview();
+    return;
+  }
+
   const jump = event.target.closest("[data-view-jump]");
   if (jump) switchView(jump.dataset.viewJump);
   const quick = event.target.closest("[data-quick]");
@@ -1525,6 +1726,13 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "reload") $("refreshButton")?.click();
     if (action === "link") window.open(target, "_blank", "noopener");
+    if (action === "focus") {
+      const field = $(target);
+      if (field) {
+        field.scrollIntoView({ behavior: "smooth", block: "center" });
+        field.focus();
+      }
+    }
   }
   const detailTarget = event.target.closest("[data-open-detail]");
   if (detailTarget) {
@@ -1923,6 +2131,88 @@ $("auditRows").addEventListener("click", (event) => {
   showAuditDetail(button.closest("tr").dataset.id);
 });
 
+$("sensitiveWordForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.submitter;
+  try {
+    await withBusy(button, "保存中", async () => {
+      const response = await api("/api/admin/sensitive-words", {
+        method: "POST",
+        body: JSON.stringify({
+          patterns: $("sensitiveWordPatterns").value,
+          replace: $("sensitiveWordReplace").checked,
+        }),
+      });
+      state.sensitiveRules = response.rules;
+      appendAuditLog("risk.sensitive_words.configure", "sensitive_words", { imported: response.imported, replace: response.replace });
+      $("sensitiveWordReplace").checked = false;
+      renderRisk();
+      renderNavCounts();
+      toast(`已导入 ${response.imported} 条规则`, "success");
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("clearSensitiveWordInput").addEventListener("click", () => {
+  $("sensitiveWordPatterns").value = "";
+  $("sensitiveWordPatterns").focus();
+});
+
+$("sensitiveWordRows").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const row = button.closest("tr");
+  const id = row?.dataset.id;
+  const rule = state.sensitiveRules.find((item) => item.id === id);
+  if (!row || !rule) return;
+  try {
+    if (button.dataset.action === "save-sensitive-rule") {
+      const name = row.querySelector("[data-field='rule-name']").value.trim();
+      const pattern = row.querySelector("[data-field='rule-pattern']").value.trim();
+      const response = await withBusy(button, "保存中", () => api(`/api/admin/sensitive-words/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name, pattern }),
+      }));
+      upsertById(state.sensitiveRules, response.rule);
+      appendAuditLog("risk.sensitive_word.update", id, { name, pattern });
+      renderRisk();
+      renderNavCounts();
+      toast("规则已保存", "success");
+      return;
+    }
+    if (button.dataset.action === "toggle-sensitive-rule") {
+      const response = await withBusy(button, rule.enabled ? "停用中" : "启用中", () => api(`/api/admin/sensitive-words/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: !rule.enabled }),
+      }));
+      upsertById(state.sensitiveRules, response.rule);
+      appendAuditLog("risk.sensitive_word.update", id, { enabled: response.rule.enabled });
+      renderRisk();
+      renderNavCounts();
+      toast(response.rule.enabled ? "规则已启用" : "规则已停用", "success");
+      return;
+    }
+    if (button.dataset.action === "delete-sensitive-rule") {
+      await withBusy(button, "删除中", () => api(`/api/admin/sensitive-words/${id}`, { method: "DELETE" }));
+      state.sensitiveRules = state.sensitiveRules.filter((item) => item.id !== id);
+      appendAuditLog("risk.sensitive_word.delete", id, {});
+      renderRisk();
+      renderNavCounts();
+      toast("规则已删除", "success");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("riskAlertRows").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action='detail-risk-alert']");
+  if (!button) return;
+  showRiskAlertDetail(button.closest("tr").dataset.id);
+});
+
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-bulk]");
   if (!button) return;
@@ -2100,10 +2390,14 @@ bindFilter("gatewayProviderFilter", renderGateways);
 bindFilter("userSearch", renderUsers);
 bindFilter("jobSearch", renderJobs);
 bindFilter("jobStatusFilter", renderJobs);
+bindFilter("riskSearch", renderRiskAlerts);
+bindFilter("riskStatusFilter", renderRiskAlerts);
+bindFilter("ruleSearch", renderSensitiveRules);
+bindFilter("ruleStatusFilter", renderSensitiveRules);
 
 $("exportErrorLogs").addEventListener("click", () => {
   const failed = state.jobs.filter((j) => j.status === "failed");
-  if (!failed.length) { showToast("没有失败任务", "info"); return; }
+  if (!failed.length) { toast("没有失败任务", "info"); return; }
   const records = failed.map((j) => ({
     id: j.id,
     createdAt: j.createdAt,
