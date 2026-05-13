@@ -15,7 +15,6 @@ import com.gptnet.image.support.Ids;
 import com.gptnet.image.support.Json;
 import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
-import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -24,7 +23,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdminService {
   private static final int DEFAULT_REDEMPTION_CODE_LENGTH = 16;
   private static final int MAX_REDEMPTION_BATCH_SIZE = 500;
+  private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
+  private static final String CALL_SQUARE_API_KEY_KEY = "call_square_api_key";
+  private static final Pattern TEXT_URL_PATTERN = Pattern.compile("https?://[^\\s\"'<>，。)\\]}]+", Pattern.CASE_INSENSITIVE);
 
   private final Db db;
   private final SecurityService security;
@@ -341,7 +346,7 @@ public class AdminService {
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String model = Optional.ofNullable(body.getModel()).orElse("").trim();
     String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
-    String requestUrl = callSquareGenerationUrl(baseUrl);
+    String requestUrl = baseUrl;
     String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
     String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
     String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
@@ -349,6 +354,12 @@ public class AdminService {
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     if (!baseUrl.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
+    boolean maskedApiKey = isMaskedSecret(apiKey);
+    if (apiKey.isBlank() || maskedApiKey) {
+      String savedApiKey = savedCallSquareApiKey();
+      if (savedApiKey != null && !savedApiKey.isBlank()) apiKey = savedApiKey;
+      else if (maskedApiKey) apiKey = "";
+    }
     if (apiKey.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "API Key 不能为空");
     if (apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
     if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
@@ -361,14 +372,7 @@ public class AdminService {
       throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
     }
 
-    Map<String, Object> upstreamBody = Maps.of(
-      "model", model,
-      "prompt", prompt,
-      "size", size,
-      "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
-      "background", background,
-      "n", 1
-    );
+    Map<String, Object> upstreamBody = callSquareRequestBody(requestUrl, model, prompt, size, outputFormat, background);
     if (upstreamGroup != null) upstreamBody.put("group", upstreamGroup);
     long started = System.currentTimeMillis();
     try {
@@ -427,6 +431,73 @@ public class AdminService {
         "rawPreview", ""
       );
     }
+  }
+
+  public Map<String, Object> getCallSquareConfig() {
+    Map<String, String> stored = siteSettings(CALL_SQUARE_CONFIG_KEY, CALL_SQUARE_API_KEY_KEY);
+    Map<String, Object> config = jsonMap(stored.get(CALL_SQUARE_CONFIG_KEY));
+    String secret = security.decryptSecret(stored.get(CALL_SQUARE_API_KEY_KEY));
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("url", stringConfig(config, "url", "https://api.superapi.me/v1/chat/completions"));
+    result.put("model", stringConfig(config, "model", "gpt-image-2"));
+    result.put("prompt", stringConfig(config, "prompt", "一张用于渠道测试的产品海报，干净背景，细节清晰"));
+    result.put("upstreamGroup", stringConfig(config, "upstreamGroup", ""));
+    result.put("size", stringConfig(config, "size", "1024x1024"));
+    result.put("outputFormat", stringConfig(config, "outputFormat", "png"));
+    result.put("background", stringConfig(config, "background", "opaque"));
+    result.put("timeoutMs", intConfig(config, "timeoutMs", 90000));
+    result.put("apiKey", secret == null ? "" : security.maskSecret(secret));
+    result.put("apiKeyConfigured", secret != null && !secret.isBlank());
+    return Maps.of("config", result);
+  }
+
+  public Map<String, Object> saveCallSquareConfig(User actor, HttpServletRequest request, CallSquareTestRequest body) {
+    String url = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
+    String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
+    String model = Optional.ofNullable(body.getModel()).orElse("").trim();
+    String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
+    String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
+    String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
+    String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
+    String upstreamGroup = Optional.ofNullable(body.getUpstreamGroup()).orElse("").trim();
+    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
+    if (url.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
+    if (!url.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
+    if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
+    if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
+    if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
+    if (!List.of("1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840").contains(size)) {
+      throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
+    }
+    if (!List.of("png", "jpeg", "jpg", "webp").contains(outputFormat)) {
+      throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
+    }
+
+    Map<String, Object> config = Maps.of(
+      "url", url,
+      "model", model,
+      "prompt", prompt,
+      "upstreamGroup", upstreamGroup,
+      "size", size,
+      "outputFormat", outputFormat,
+      "background", background,
+      "timeoutMs", timeoutMs
+    );
+    try {
+      saveSiteSetting(CALL_SQUARE_CONFIG_KEY, Json.MAPPER.writeValueAsString(config));
+    } catch (Exception exception) {
+      throw AppException.badRequest("CONFIG_SAVE_FAILED", "调用配置保存失败");
+    }
+    if (!apiKey.isBlank() && !isMaskedSecret(apiKey)) {
+      saveSiteSetting(CALL_SQUARE_API_KEY_KEY, security.encryptSecret(apiKey));
+    }
+    audit(actor, request, "call_square.config.save", model, Maps.of(
+      "url", safeEndpointForAudit(url),
+      "model", model,
+      "hasApiKey", !apiKey.isBlank(),
+      "upstreamGroup", upstreamGroup
+    ));
+    return getCallSquareConfig();
   }
 
   public Map<String, Object> jobs(int rawLimit) {
@@ -808,21 +879,29 @@ public class AdminService {
     return queryStart >= 0 ? value.substring(0, queryStart) : value;
   }
 
-  private String callSquareGenerationUrl(String baseUrl) {
-    String normalized = Optional.ofNullable(baseUrl).orElse("").trim();
-    try {
-      URI uri = URI.create(normalized);
-      String path = Optional.ofNullable(uri.getPath()).orElse("").replaceAll("/+$", "");
-      if (path.endsWith("/images/generations")) return stripTrailingSlash(normalized);
-      if (path.isBlank()) return stripTrailingSlash(normalized) + "/v1/images/generations";
-      return stripTrailingSlash(normalized) + "/images/generations";
-    } catch (Exception ignored) {
-      return stripTrailingSlash(normalized) + "/v1/images/generations";
+  private Map<String, Object> callSquareRequestBody(
+    String requestUrl,
+    String model,
+    String prompt,
+    String size,
+    String outputFormat,
+    String background
+  ) {
+    if (requestUrl.toLowerCase().contains("/chat/completions")) {
+      return Maps.of(
+        "model", model,
+        "messages", List.of(Maps.of("role", "user", "content", prompt)),
+        "stream", false
+      );
     }
-  }
-
-  private String stripTrailingSlash(String value) {
-    return Optional.ofNullable(value).orElse("").replaceAll("/+$", "");
+    return Maps.of(
+      "model", model,
+      "prompt", prompt,
+      "size", size,
+      "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
+      "background", background,
+      "n", 1
+    );
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {
@@ -842,24 +921,71 @@ public class AdminService {
     return Stream.empty();
   }
 
-  @SuppressWarnings("unchecked")
   private Map<String, Object> firstImageResult(Map<String, Object> payload, String outputFormat) {
-    Object data = payload.get("data");
-    if (!(data instanceof List<?> list) || list.isEmpty() || !(list.get(0) instanceof Map<?, ?> item)) return null;
-    Map<String, Object> image = (Map<String, Object>) item;
-    if (image.get("url") != null && !String.valueOf(image.get("url")).isBlank()) {
-      return Maps.of("url", String.valueOf(image.get("url")), "source", "url", "format", outputFormat);
+    return findImageResult(payload, outputFormat);
+  }
+
+  private Map<String, Object> findImageResult(Object value, String outputFormat) {
+    if (value == null) return null;
+    if (value instanceof Map<?, ?> map) {
+      Map<String, Object> direct = directImageResult(map, outputFormat);
+      if (direct != null) return direct;
+      for (Object child : map.values()) {
+        Map<String, Object> found = findImageResult(child, outputFormat);
+        if (found != null) return found;
+      }
+      return null;
     }
-    if (image.get("b64_json") != null && !String.valueOf(image.get("b64_json")).isBlank()) {
-      String format = "jpg".equals(outputFormat) ? "jpeg" : outputFormat;
-      String mime = "jpeg".equals(format) ? "image/jpeg" : "image/" + format;
-      return Maps.of(
-        "url", "data:" + mime + ";base64," + String.valueOf(image.get("b64_json")),
-        "source", "b64_json",
-        "format", outputFormat
-      );
+    if (value instanceof List<?> list) {
+      for (Object child : list) {
+        Map<String, Object> found = findImageResult(child, outputFormat);
+        if (found != null) return found;
+      }
+      return null;
+    }
+    if (value instanceof String text) {
+      String trimmed = text.trim();
+      if (trimmed.startsWith("data:image/")) return Maps.of("url", trimmed, "source", "data_url", "format", outputFormat);
+      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        try {
+          Map<String, Object> found = findImageResult(Json.MAPPER.readValue(trimmed, Object.class), outputFormat);
+          if (found != null) return found;
+        } catch (Exception ignored) {
+        }
+      }
+      String url = firstTextUrl(trimmed);
+      if (url != null) return Maps.of("url", url, "source", "text_url", "format", outputFormat);
     }
     return null;
+  }
+
+  private Map<String, Object> directImageResult(Map<?, ?> map, String outputFormat) {
+    if (map.get("b64_json") != null && !String.valueOf(map.get("b64_json")).isBlank()) {
+      return dataUrlImageResult(String.valueOf(map.get("b64_json")), outputFormat, "b64_json");
+    }
+    Object imageUrl = map.get("image_url");
+    if (imageUrl instanceof Map<?, ?> nested && nested.get("url") != null && !String.valueOf(nested.get("url")).isBlank()) {
+      return Maps.of("url", String.valueOf(nested.get("url")), "source", "image_url", "format", outputFormat);
+    }
+    if (imageUrl instanceof String text && !text.isBlank()) {
+      String url = firstTextUrl(text);
+      if (url != null) return Maps.of("url", url, "source", "image_url", "format", outputFormat);
+    }
+    if (map.get("url") != null && !String.valueOf(map.get("url")).isBlank()) {
+      return Maps.of("url", String.valueOf(map.get("url")), "source", "url", "format", outputFormat);
+    }
+    return null;
+  }
+
+  private Map<String, Object> dataUrlImageResult(String base64, String outputFormat, String source) {
+    String format = "jpg".equals(outputFormat) ? "jpeg" : outputFormat;
+    String mime = "jpeg".equals(format) ? "image/jpeg" : "image/" + format;
+    return Maps.of("url", "data:" + mime + ";base64," + base64, "source", source, "format", outputFormat);
+  }
+
+  private String firstTextUrl(String text) {
+    Matcher matcher = TEXT_URL_PATTERN.matcher(text);
+    return matcher.find() ? matcher.group() : null;
   }
 
   private Object jsonValue(String raw) {
@@ -869,6 +995,57 @@ public class AdminService {
     } catch (Exception ignored) {
       return Map.of();
     }
+  }
+
+  private Map<String, Object> jsonMap(String raw) {
+    if (raw == null || raw.isBlank()) return Map.of();
+    try {
+      return Json.MAPPER.readValue(raw, Json.MAP);
+    } catch (Exception ignored) {
+      return Map.of();
+    }
+  }
+
+  private String savedCallSquareApiKey() {
+    return security.decryptSecret(siteSettings(CALL_SQUARE_API_KEY_KEY).get(CALL_SQUARE_API_KEY_KEY));
+  }
+
+  private Map<String, String> siteSettings(String... keys) {
+    if (keys.length == 0) return Map.of();
+    List<String> wanted = List.of(keys);
+    MapSqlParameterSource params = new MapSqlParameterSource().addValue("keys", wanted);
+    Map<String, String> result = new LinkedHashMap<>();
+    db.jdbc().query("""
+      SELECT "key", "value" FROM "SiteSetting" WHERE "key" IN (:keys)
+      """, params, (RowCallbackHandler) rs -> result.put(rs.getString("key"), rs.getString("value")));
+    return result;
+  }
+
+  private void saveSiteSetting(String key, String value) {
+    db.jdbc().update("""
+      INSERT INTO "SiteSetting" ("key", "value", "updatedAt")
+      VALUES (:key, :value, now())
+      ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = now()
+      """, Map.of("key", key, "value", value == null ? "" : value));
+  }
+
+  private String stringConfig(Map<String, Object> config, String key, String fallback) {
+    Object value = config.get(key);
+    if (value == null) return fallback;
+    String text = String.valueOf(value).trim();
+    return text.isBlank() ? fallback : text;
+  }
+
+  private int intConfig(Map<String, Object> config, String key, int fallback) {
+    Object value = config.get(key);
+    if (value instanceof Number number) return number.intValue();
+    if (value != null) {
+      try {
+        return Integer.parseInt(String.valueOf(value).trim());
+      } catch (NumberFormatException ignored) {
+      }
+    }
+    return fallback;
   }
 
   private Map<String, Object> publicPatchBody(Object body) {
@@ -884,7 +1061,7 @@ public class AdminService {
   public Map<String, Object> getSettings() {
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("buy_credits_url", "");
-    db.jdbc().query("SELECT \"key\", \"value\" FROM \"SiteSetting\"", Map.of(),
+    db.jdbc().query("SELECT \"key\", \"value\" FROM \"SiteSetting\" WHERE \"key\" IN ('buy_credits_url')", Map.of(),
       rs -> { result.put(rs.getString("key"), rs.getString("value")); });
     return result;
   }

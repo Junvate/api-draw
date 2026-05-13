@@ -117,6 +117,18 @@ public class AdminController {
     return admin.callSquareTest(actor, request, body);
   }
 
+  @GetMapping("/call-square/config")
+  public Map<String, Object> getCallSquareConfig(HttpServletRequest request) {
+    requireAdmin(request);
+    return admin.getCallSquareConfig();
+  }
+
+  @PatchMapping("/call-square/config")
+  public Map<String, Object> saveCallSquareConfig(HttpServletRequest request, @Valid @RequestBody CallSquareTestRequest body) {
+    User actor = requireAdmin(request);
+    return admin.saveCallSquareConfig(actor, request, body);
+  }
+
   @GetMapping("/jobs")
   public Map<String, Object> jobs(HttpServletRequest request, @RequestParam(value = "limit", defaultValue = "100") int limit) {
     requireAdmin(request);

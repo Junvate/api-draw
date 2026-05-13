@@ -1254,6 +1254,16 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   height: 42px;
 }
 
+.call-square-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.call-square-actions button {
+  min-width: 0;
+}
+
 .call-square-prompt {
   gap: 7px;
 }
@@ -3102,6 +3112,10 @@ body.admin-sidebar-collapsed .side-footer button {
 
   .call-square-form {
     padding: 12px;
+  }
+
+  .call-square-actions {
+    grid-template-columns: 1fr;
   }
 
   .call-square-kpis {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>绘图 API 后台</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/admin.css?v=20260513-call-square-image-v3" />
+    <link rel="stylesheet" href="/admin.css?v=20260513-call-square-exact-v4" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   </head>
   <body class="admin-auth-locked">
@@ -287,7 +287,7 @@
                 <div>
                   <span class="channel-panel-eyebrow">Channel Probe</span>
                   <h2>调用广场</h2>
-                  <p>临时验证上游 URL、API Key 和模型，不写入渠道配置。</p>
+                  <p>保存一组测试参数，URL 完全按填写值请求。</p>
                 </div>
                 <button data-view-jump="channels" type="button">返回渠道</button>
               </div>
@@ -295,7 +295,7 @@
               <div class="call-square-body">
                 <form class="call-square-form" id="callSquareForm" autocomplete="off">
                   <label class="call-square-url">URL
-                    <input name="url" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1" inputmode="url" required />
+                    <input name="url" value="https://api.superapi.me/v1/chat/completions" placeholder="https://api.superapi.me/v1/chat/completions" inputmode="url" required />
                   </label>
                   <label>API Key
                     <input name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
@@ -338,7 +338,11 @@
                   <label class="call-square-prompt">提示词
                     <textarea name="prompt" rows="5" placeholder="一张用于渠道测试的产品海报，干净背景，细节清晰" required>一张用于渠道测试的产品海报，干净背景，细节清晰</textarea>
                   </label>
-                  <button class="primary" id="callSquareSubmit" type="submit">生成测试</button>
+                  <div class="call-square-actions">
+                    <button class="primary" id="callSquareSubmit" type="submit">生成测试</button>
+                    <button id="callSquareSaveConfig" type="button">保存配置</button>
+                    <button class="danger" id="callSquareClearConfig" type="button">恢复默认</button>
+                  </div>
                 </form>
 
                 <div class="call-square-result empty" id="callSquareResult">
@@ -656,6 +660,6 @@
       </div>
     </section>
     <div class="toast-stack" id="toastStack"></div>
-    <script src="/admin.js?v=20260513-call-square-image-v3"></script>
+    <script src="/admin.js?v=20260513-call-square-exact-v4"></script>
   </body>
 </html>

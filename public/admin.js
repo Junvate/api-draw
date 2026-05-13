@@ -6,6 +6,19 @@ const STORAGE_KEYS = {
   successRateScope: "admin-success-rate-scope",
 };
 
+const DEFAULT_CALL_SQUARE_CONFIG = {
+  url: "https://api.superapi.me/v1/chat/completions",
+  apiKey: "",
+  model: "gpt-image-2",
+  prompt: "一张用于渠道测试的产品海报，干净背景，细节清晰",
+  upstreamGroup: "",
+  size: "1024x1024",
+  outputFormat: "png",
+  background: "opaque",
+  timeoutMs: 90000,
+  apiKeyConfigured: false,
+};
+
 const AUTO_REFRESH_MS = 30000;
 
 const state = {
@@ -47,6 +60,8 @@ const state = {
   loadingAll: false,
   lastLoadPromise: null,
   lastCreatedCodes: [],
+  callSquareConfig: { ...DEFAULT_CALL_SQUARE_CONFIG },
+  callSquareConfigLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -59,7 +74,7 @@ const clip = (value, length = 72) => {
 const titles = {
   overview: ["首页", "业务健康、渠道能力和近期风险"],
   channels: ["上游渠道", "每个渠道代表一个上游入口或中转站"],
-  "call-square": ["调用广场", "临时测试上游 URL、API Key 和模型"],
+  "call-square": ["调用广场", "保存并测试上游 URL、API Key 和模型"],
   users: ["用户", "账号状态与积分"],
   jobs: ["任务", "最近 100 条绘图请求"],
   gallery: ["作品看板", "最近 3000 张生成图片"],
@@ -606,6 +621,9 @@ function clearAdminData() {
   state.selected.users.clear();
   state.drafts.gateways = {};
   state.drafts.users = {};
+  state.callSquareConfig = { ...DEFAULT_CALL_SQUARE_CONFIG };
+  state.callSquareConfigLoaded = false;
+  applyCallSquareConfig(state.callSquareConfig);
   $("adminIdentity").textContent = "未登录";
   $("sideHealth").textContent = "未连接";
   $("sideHealthMeta").textContent = "等待检查";
@@ -715,6 +733,9 @@ async function loadAll() {
       state.sensitiveRules = sensitiveRules.rules;
       state.riskAlerts = riskAlerts.alerts;
       state.ready = ready;
+      if (!state.callSquareConfigLoaded) {
+        await loadCallSquareConfig().catch((error) => toast(error.message, "error"));
+      }
       pruneSelections();
       pruneDrafts();
       renderRuntime(ready);
@@ -1711,18 +1732,58 @@ function gatewayTestMessage(response) {
   return `测试失败${response.error ? `：${response.error}` : ""}`;
 }
 
-function callSquareGenerationUrl(rawUrl) {
-  const value = String(rawUrl || "").trim().replace(/\/+$/, "");
-  if (!value) return "";
-  try {
-    const url = new URL(value);
-    const path = url.pathname.replace(/\/+$/, "");
-    if (path.endsWith("/images/generations")) return value;
-    if (!path || path === "/") return `${value}/v1/images/generations`;
-    return `${value}/images/generations`;
-  } catch (_) {
-    return `${value}/v1/images/generations`;
-  }
+function callSquareRequestUrl(rawUrl) {
+  return String(rawUrl || "").trim();
+}
+
+function callSquareFormData() {
+  const form = $("callSquareForm");
+  const data = formData(form);
+  return {
+    url: callSquareRequestUrl(data.url),
+    apiKey: String(data.apiKey || "").trim(),
+    model: String(data.model || "").trim(),
+    prompt: String(data.prompt || "").trim(),
+    upstreamGroup: String(data.upstreamGroup || "").trim(),
+    size: String(data.size || "1024x1024").trim(),
+    outputFormat: String(data.outputFormat || "png").trim(),
+    background: String(data.background || "opaque").trim(),
+    timeoutMs: Number(data.timeoutMs || 90000),
+  };
+}
+
+function applyCallSquareConfig(config = {}) {
+  const form = $("callSquareForm");
+  if (!form) return;
+  const next = { ...DEFAULT_CALL_SQUARE_CONFIG, ...config };
+  state.callSquareConfig = next;
+  Object.entries({
+    url: next.url,
+    apiKey: next.apiKey || "",
+    model: next.model,
+    prompt: next.prompt,
+    upstreamGroup: next.upstreamGroup,
+    size: next.size,
+    outputFormat: next.outputFormat,
+    background: next.background,
+    timeoutMs: next.timeoutMs,
+  }).forEach(([key, value]) => {
+    if (form.elements[key]) form.elements[key].value = value ?? "";
+  });
+}
+
+async function loadCallSquareConfig() {
+  const payload = await api("/api/admin/call-square/config");
+  applyCallSquareConfig(payload.config || {});
+  state.callSquareConfigLoaded = true;
+}
+
+async function saveCallSquareConfig(button) {
+  await withBusy(button, "保存中", async () => {
+    const payload = await api("/api/admin/call-square/config", { method: "PATCH", body: JSON.stringify(callSquareFormData()) });
+    applyCallSquareConfig(payload.config || {});
+  });
+  toast("调用配置已保存", "success");
 }
 
 function renderCallSquareResult(result) {
@@ -1822,6 +1883,9 @@ function switchView(view) {
   renderQuickActions(nextView);
   if (nextView === "gallery" && state.user?.role === "admin" && !state.gallery.images.length) {
     loadGallery().catch((error) => toast(error.message, "error"));
+  }
+  if (nextView === "call-square" && state.user?.role === "admin" && !state.callSquareConfigLoaded) {
+    loadCallSquareConfig().catch((error) => toast(error.message, "error"));
   }
   const searchId = searchTargets[nextView];
   $("globalSearch").value = searchId ? $(searchId).value : "";
@@ -2159,16 +2223,7 @@ $("callSquareForm").addEventListener("submit", async (event) => {
   const button = event.submitter;
   try {
     await withBusy(button, "测试中", async () => {
-      const data = formData(form);
-      data.url = String(data.url || "").trim();
-      data.apiKey = String(data.apiKey || "").trim();
-      data.model = String(data.model || "").trim();
-      data.prompt = String(data.prompt || "").trim();
-      data.upstreamGroup = String(data.upstreamGroup || "").trim();
-      data.size = String(data.size || "1024x1024").trim();
-      data.outputFormat = String(data.outputFormat || "png").trim();
-      data.background = String(data.background || "opaque").trim();
-      data.timeoutMs = Number(data.timeoutMs || 90000);
+      const data = callSquareFormData();
       validateGatewayPayload({ baseUrl: data.url, apiKey: data.apiKey });
       if (!data.model) throw new Error("Model 不能为空");
       if (data.prompt.length < 4) throw new Error("提示词至少输入 4 个字");
@@ -2186,11 +2241,25 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       size: form.elements.size?.value || "",
       image: null,
       error: error.message,
-      url: callSquareGenerationUrl(form.elements.url?.value || ""),
+      url: callSquareRequestUrl(form.elements.url?.value || ""),
       rawPreview: "",
     });
     toast(error.message, "error");
   }
+});
+
+$("callSquareSaveConfig").addEventListener("click", async (event) => {
+  try {
+    await saveCallSquareConfig(event.currentTarget);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+
+$("callSquareClearConfig").addEventListener("click", () => {
+  applyCallSquareConfig(DEFAULT_CALL_SQUARE_CONFIG);
+  renderCallSquareResult(null);
+  toast("已恢复默认测试参数", "success");
 });
 
 $("userForm").addEventListener("submit", async (event) => {

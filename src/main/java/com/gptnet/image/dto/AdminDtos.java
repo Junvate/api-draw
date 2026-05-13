@@ -67,8 +67,6 @@ public final class AdminDtos {
     private String model;
     @Size(max = 8000)
     private String prompt;
-    @Size(max = 80)
-    private String generationPath;
     @Size(max = 120)
     private String upstreamGroup;
     @Size(max = 40)
@@ -91,8 +89,6 @@ public final class AdminDtos {
     public void setModel(String model) { this.model = model; }
     public String getPrompt() { return prompt; }
     public void setPrompt(String prompt) { this.prompt = prompt; }
-    public String getGenerationPath() { return generationPath; }
-    public void setGenerationPath(String generationPath) { this.generationPath = generationPath; }
     public String getUpstreamGroup() { return upstreamGroup; }
     public void setUpstreamGroup(String upstreamGroup) { this.upstreamGroup = upstreamGroup; }
     public String getSize() { return size; }
