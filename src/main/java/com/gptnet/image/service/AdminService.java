@@ -15,6 +15,7 @@ import com.gptnet.image.support.Ids;
 import com.gptnet.image.support.Json;
 import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
+import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -810,8 +811,15 @@ public class AdminService {
 
   private String generationPathForCallSquare(String baseUrl) {
     String normalized = Optional.ofNullable(baseUrl).orElse("").trim();
-    if (normalized.matches("(?i)^https?://.*/images/generations/?$")) return "";
-    return "/images/generations";
+    try {
+      URI uri = URI.create(normalized);
+      String path = Optional.ofNullable(uri.getPath()).orElse("").replaceAll("/+$", "");
+      if (path.endsWith("/images/generations")) return "";
+      if (path.isBlank()) return "/v1/images/generations";
+      return "/images/generations";
+    } catch (Exception ignored) {
+      return "/v1/images/generations";
+    }
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {
