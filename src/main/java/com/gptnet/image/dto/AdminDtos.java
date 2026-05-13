@@ -65,6 +65,21 @@ public final class AdminDtos {
     private String apiKey;
     @Size(max = 120)
     private String model;
+    @Size(max = 8000)
+    private String prompt;
+    @Size(max = 80)
+    private String generationPath;
+    @Size(max = 120)
+    private String upstreamGroup;
+    @Size(max = 40)
+    private String size;
+    @Size(max = 40)
+    private String outputFormat;
+    @Size(max = 40)
+    private String background;
+    @Min(1000)
+    @Max(600000)
+    private Integer timeoutMs;
 
     public String getUrl() { return url; }
     public void setUrl(String url) { this.url = url; }
@@ -74,6 +89,20 @@ public final class AdminDtos {
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
+    public String getPrompt() { return prompt; }
+    public void setPrompt(String prompt) { this.prompt = prompt; }
+    public String getGenerationPath() { return generationPath; }
+    public void setGenerationPath(String generationPath) { this.generationPath = generationPath; }
+    public String getUpstreamGroup() { return upstreamGroup; }
+    public void setUpstreamGroup(String upstreamGroup) { this.upstreamGroup = upstreamGroup; }
+    public String getSize() { return size; }
+    public void setSize(String size) { this.size = size; }
+    public String getOutputFormat() { return outputFormat; }
+    public void setOutputFormat(String outputFormat) { this.outputFormat = outputFormat; }
+    public String getBackground() { return background; }
+    public void setBackground(String background) { this.background = background; }
+    public Integer getTimeoutMs() { return timeoutMs; }
+    public void setTimeoutMs(Integer timeoutMs) { this.timeoutMs = timeoutMs; }
   }
 
   public static class GatewayRequest {

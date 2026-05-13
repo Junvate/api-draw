@@ -339,38 +339,67 @@ public class AdminService {
     String baseUrl = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String model = Optional.ofNullable(body.getModel()).orElse("").trim();
+    String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
+    String generationPath = Optional.ofNullable(body.getGenerationPath()).filter(s -> !s.isBlank()).orElse("/images/generations").trim();
+    String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
+    String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
+    String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
+    String upstreamGroup = blankToNull(body.getUpstreamGroup());
+    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     if (!baseUrl.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
     if (apiKey.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "API Key 不能为空");
     if (apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
     if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
+    if (prompt.length() < 4) throw AppException.badRequest("PROMPT_TOO_SHORT", "提示词至少输入 4 个字");
+    if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
+    if (!List.of("1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840").contains(size)) {
+      throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
+    }
+    if (!List.of("png", "jpeg", "jpg", "webp").contains(outputFormat)) {
+      throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
+    }
 
-    String requestUrl = imageService.upstreamUrl(baseUrl, "/models");
+    String requestUrl = imageService.upstreamUrl(baseUrl, generationPath);
+    Map<String, Object> upstreamBody = Maps.of(
+      "model", model,
+      "prompt", prompt,
+      "size", size,
+      "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
+      "response_format", "url",
+      "background", background,
+      "n", 1
+    );
+    if (upstreamGroup != null) upstreamBody.put("group", upstreamGroup);
     long started = System.currentTimeMillis();
     try {
-      var response = upstream.json(requestUrl, "GET", Map.of("Authorization", "Bearer " + apiKey), null, 15000);
+      var response = upstream.json(requestUrl, "POST", Map.of("Authorization", "Bearer " + apiKey), upstreamBody, timeoutMs);
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
-      List<String> models = modelIds(response.payload()).limit(60).toList();
-      boolean modelFound = models.stream().anyMatch(item -> item.equals(model));
+      Map<String, Object> image = firstImageResult(response.payload(), outputFormat);
       String error = response.ok() ? null : upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status());
+      boolean ok = response.ok() && image != null;
+      if (response.ok() && image == null) error = "上游没有返回图片结果";
       Map<String, Object> result = Maps.of(
-        "ok", response.ok(),
+        "ok", ok,
         "status", response.status(),
         "latencyMs", latencyMs,
         "url", requestUrl,
         "model", model,
-        "modelFound", modelFound,
-        "models", models,
+        "prompt", prompt,
+        "size", size,
+        "image", image,
         "error", error,
         "rawPreview", truncate(response.text(), 2400)
       );
       audit(actor, request, "call_square.test", model, Maps.of(
-        "ok", response.ok(),
+        "ok", ok,
         "status", response.status(),
         "latencyMs", latencyMs,
         "url", safeEndpointForAudit(baseUrl),
         "model", model,
-        "modelFound", modelFound
+        "generationPath", generationPath,
+        "size", size,
+        "hasImage", image != null
       ));
       return result;
     } catch (Exception exception) {
@@ -382,6 +411,8 @@ public class AdminService {
         "latencyMs", latencyMs,
         "url", safeEndpointForAudit(baseUrl),
         "model", model,
+        "generationPath", generationPath,
+        "size", size,
         "error", truncate(message, 500)
       ));
       return Maps.of(
@@ -390,8 +421,9 @@ public class AdminService {
         "latencyMs", latencyMs,
         "url", requestUrl,
         "model", model,
-        "modelFound", false,
-        "models", List.of(),
+        "prompt", prompt,
+        "size", size,
+        "image", null,
         "error", message,
         "rawPreview", ""
       );
@@ -792,6 +824,26 @@ public class AdminService {
       return list.stream().map(String::valueOf).filter(item -> !item.isBlank());
     }
     return Stream.empty();
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Object> firstImageResult(Map<String, Object> payload, String outputFormat) {
+    Object data = payload.get("data");
+    if (!(data instanceof List<?> list) || list.isEmpty() || !(list.get(0) instanceof Map<?, ?> item)) return null;
+    Map<String, Object> image = (Map<String, Object>) item;
+    if (image.get("url") != null && !String.valueOf(image.get("url")).isBlank()) {
+      return Maps.of("url", String.valueOf(image.get("url")), "source", "url", "format", outputFormat);
+    }
+    if (image.get("b64_json") != null && !String.valueOf(image.get("b64_json")).isBlank()) {
+      String format = "jpg".equals(outputFormat) ? "jpeg" : outputFormat;
+      String mime = "jpeg".equals(format) ? "image/jpeg" : "image/" + format;
+      return Maps.of(
+        "url", "data:" + mime + ";base64," + String.valueOf(image.get("b64_json")),
+        "source", "b64_json",
+        "format", outputFormat
+      );
+    }
+    return null;
   }
 
   private Object jsonValue(String raw) {

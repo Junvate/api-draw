@@ -115,7 +115,7 @@ const quickActions = {
     ["jobs", "查看任务队列", "view", "jobs"],
   ],
   "call-square": [
-    ["call-square-test", "测试连接", "click", "callSquareSubmit", "primary"],
+    ["call-square-test", "生成测试", "click", "callSquareSubmit", "primary"],
     ["channels", "渠道清单", "view", "channels"],
     ["system", "系统探针", "view", "system"],
   ],
@@ -1718,33 +1718,35 @@ function renderCallSquareResult(result) {
     target.className = "call-square-result empty";
     target.innerHTML = `
       <div class="call-square-empty">
-        <strong>等待测试</strong>
-        <span>提交后会请求上游 /models，并检查返回列表里是否包含该模型。</span>
+        <strong>等待生成</strong>
+        <span>提交后会用这组渠道参数生成一张测试图片。</span>
       </div>
     `;
     return;
   }
-  const models = Array.isArray(result.models) ? result.models : [];
+  const imageUrl = result.image?.url || "";
   target.className = `call-square-result ${result.ok ? "ok" : "error"}`;
   target.innerHTML = `
     <div class="call-square-result-head">
       <div>
-        <span>${result.ok ? "测试通过" : "测试失败"}</span>
+        <span>${result.ok ? "生成成功" : "生成失败"}</span>
         <strong>${escapeHtml(result.model || "-")}</strong>
       </div>
       ${statusBadge(result.ok ? "healthy" : "failed")}
     </div>
+    <div class="call-square-preview ${imageUrl ? "" : "empty"}">
+      ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="调用广场生成结果" />` : `<span>没有图片返回</span>`}
+    </div>
     <div class="call-square-kpis">
       <div><span>HTTP</span><strong>${escapeHtml(result.status || 0)}</strong></div>
       <div><span>耗时</span><strong>${escapeHtml(formatLatency(result.latencyMs))}</strong></div>
-      <div><span>模型命中</span><strong>${result.modelFound ? "是" : "否"}</strong></div>
+      <div><span>尺寸</span><strong>${escapeHtml(result.size || "-")}</strong></div>
     </div>
     <div class="call-square-detail">
       <label>请求地址<input readonly value="${escapeHtml(result.url || "-")}" /></label>
       ${result.error ? `<div class="call-square-error">${escapeHtml(result.error)}</div>` : ""}
-      <div class="model-chip-list">
-        ${models.slice(0, 24).map((model) => `<span class="${model === result.model ? "active" : ""}">${escapeHtml(model)}</span>`).join("") || "<span>未返回模型列表</span>"}
-      </div>
+      ${result.prompt ? `<div class="call-square-prompt-preview">${escapeHtml(result.prompt)}</div>` : ""}
+      ${imageUrl ? `<button class="small" data-action="copy-call-square-image" data-url="${escapeHtml(imageUrl)}" type="button">复制图片地址</button>` : ""}
       ${result.rawPreview ? `<details class="call-square-raw"><summary>原始返回</summary><pre>${escapeHtml(result.rawPreview)}</pre></details>` : ""}
     </div>
   `;
@@ -1990,6 +1992,15 @@ document.addEventListener("click", async (event) => {
       toast(error.message, "error");
     }
   }
+  if (event.target.closest("[data-action='copy-call-square-image']")) {
+    const button = event.target.closest("[data-action='copy-call-square-image']");
+    try {
+      await withBusy(button, "复制中", () => copyText(button.dataset.url || ""));
+      toast("图片地址已复制", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
 });
 
 $("closeDrawer").addEventListener("click", closeDrawer);
@@ -2138,11 +2149,19 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       data.url = String(data.url || "").trim();
       data.apiKey = String(data.apiKey || "").trim();
       data.model = String(data.model || "").trim();
+      data.prompt = String(data.prompt || "").trim();
+      data.generationPath = String(data.generationPath || "").trim();
+      data.upstreamGroup = String(data.upstreamGroup || "").trim();
+      data.size = String(data.size || "1024x1024").trim();
+      data.outputFormat = String(data.outputFormat || "png").trim();
+      data.background = String(data.background || "opaque").trim();
+      data.timeoutMs = Number(data.timeoutMs || 90000);
       validateGatewayPayload({ baseUrl: data.url, apiKey: data.apiKey });
       if (!data.model) throw new Error("Model 不能为空");
+      if (data.prompt.length < 4) throw new Error("提示词至少输入 4 个字");
       const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(data) });
       renderCallSquareResult(result);
-      toast(result.ok ? "测试通过" : (result.error || "测试失败"), result.ok ? "success" : "error");
+      toast(result.ok ? "生成成功" : (result.error || "生成失败"), result.ok ? "success" : "error");
     });
   } catch (error) {
     renderCallSquareResult({
@@ -2150,8 +2169,9 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       status: 0,
       latencyMs: 0,
       model: form.elements.model?.value || "",
-      modelFound: false,
-      models: [],
+      prompt: form.elements.prompt?.value || "",
+      size: form.elements.size?.value || "",
+      image: null,
       error: error.message,
       url: form.elements.url?.value || "",
       rawPreview: "",

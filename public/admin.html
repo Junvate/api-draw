@@ -303,13 +303,51 @@
                   <label>Model
                     <input name="model" value="gpt-image-2" placeholder="gpt-image-2" required />
                   </label>
-                  <button class="primary" id="callSquareSubmit" type="submit">测试连接</button>
+                  <label>生成路径
+                    <input name="generationPath" value="/images/generations" placeholder="/images/generations" />
+                  </label>
+                  <label>分组
+                    <input name="upstreamGroup" placeholder="GPT-Image-2-2k" />
+                  </label>
+                  <label>尺寸
+                    <select name="size">
+                      <option value="1024x1024">1024x1024</option>
+                      <option value="1536x1024">1536x1024</option>
+                      <option value="1024x1536">1024x1536</option>
+                      <option value="2048x2048">2048x2048</option>
+                      <option value="2048x1152">2048x1152</option>
+                      <option value="1152x2048">1152x2048</option>
+                      <option value="3840x2160">3840x2160</option>
+                      <option value="2160x3840">2160x3840</option>
+                    </select>
+                  </label>
+                  <label>格式
+                    <select name="outputFormat">
+                      <option value="png">png</option>
+                      <option value="jpeg">jpeg</option>
+                      <option value="webp">webp</option>
+                    </select>
+                  </label>
+                  <label>背景
+                    <select name="background">
+                      <option value="opaque">opaque</option>
+                      <option value="transparent">transparent</option>
+                      <option value="auto">auto</option>
+                    </select>
+                  </label>
+                  <label>超时 ms
+                    <input name="timeoutMs" type="number" value="90000" min="1000" max="600000" />
+                  </label>
+                  <label class="call-square-prompt">提示词
+                    <textarea name="prompt" rows="5" placeholder="一张用于渠道测试的产品海报，干净背景，细节清晰" required>一张用于渠道测试的产品海报，干净背景，细节清晰</textarea>
+                  </label>
+                  <button class="primary" id="callSquareSubmit" type="submit">生成测试</button>
                 </form>
 
                 <div class="call-square-result empty" id="callSquareResult">
                   <div class="call-square-empty">
-                    <strong>等待测试</strong>
-                    <span>提交后会请求上游 /models，并检查返回列表里是否包含该模型。</span>
+                    <strong>等待生成</strong>
+                    <span>提交后会用这组渠道参数生成一张测试图片。</span>
                   </div>
                 </div>
               </div>
