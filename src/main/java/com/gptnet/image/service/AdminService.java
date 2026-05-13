@@ -341,7 +341,7 @@ public class AdminService {
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String model = Optional.ofNullable(body.getModel()).orElse("").trim();
     String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
-    String generationPath = generationPathForCallSquare(baseUrl);
+    String requestUrl = callSquareGenerationUrl(baseUrl);
     String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
     String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
     String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
@@ -361,7 +361,6 @@ public class AdminService {
       throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
     }
 
-    String requestUrl = imageService.upstreamUrl(baseUrl, generationPath);
     Map<String, Object> upstreamBody = Maps.of(
       "model", model,
       "prompt", prompt,
@@ -397,7 +396,7 @@ public class AdminService {
         "latencyMs", latencyMs,
         "url", safeEndpointForAudit(baseUrl),
         "model", model,
-        "generationPath", generationPath,
+        "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
         "hasImage", image != null
       ));
@@ -411,7 +410,7 @@ public class AdminService {
         "latencyMs", latencyMs,
         "url", safeEndpointForAudit(baseUrl),
         "model", model,
-        "generationPath", generationPath,
+        "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
         "error", truncate(message, 500)
       ));
@@ -809,17 +808,21 @@ public class AdminService {
     return queryStart >= 0 ? value.substring(0, queryStart) : value;
   }
 
-  private String generationPathForCallSquare(String baseUrl) {
+  private String callSquareGenerationUrl(String baseUrl) {
     String normalized = Optional.ofNullable(baseUrl).orElse("").trim();
     try {
       URI uri = URI.create(normalized);
       String path = Optional.ofNullable(uri.getPath()).orElse("").replaceAll("/+$", "");
-      if (path.endsWith("/images/generations")) return "";
-      if (path.isBlank()) return "/v1/images/generations";
-      return "/images/generations";
+      if (path.endsWith("/images/generations")) return stripTrailingSlash(normalized);
+      if (path.isBlank()) return stripTrailingSlash(normalized) + "/v1/images/generations";
+      return stripTrailingSlash(normalized) + "/images/generations";
     } catch (Exception ignored) {
-      return "/v1/images/generations";
+      return stripTrailingSlash(normalized) + "/v1/images/generations";
     }
+  }
+
+  private String stripTrailingSlash(String value) {
+    return Optional.ofNullable(value).orElse("").replaceAll("/+$", "");
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {

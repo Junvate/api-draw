@@ -1711,6 +1711,20 @@ function gatewayTestMessage(response) {
   return `测试失败${response.error ? `：${response.error}` : ""}`;
 }
 
+function callSquareGenerationUrl(rawUrl) {
+  const value = String(rawUrl || "").trim().replace(/\/+$/, "");
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/\/+$/, "");
+    if (path.endsWith("/images/generations")) return value;
+    if (!path || path === "/") return `${value}/v1/images/generations`;
+    return `${value}/images/generations`;
+  } catch (_) {
+    return `${value}/v1/images/generations`;
+  }
+}
+
 function renderCallSquareResult(result) {
   const target = $("callSquareResult");
   if (!target) return;
@@ -2172,7 +2186,7 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       size: form.elements.size?.value || "",
       image: null,
       error: error.message,
-      url: form.elements.url?.value || "",
+      url: callSquareGenerationUrl(form.elements.url?.value || ""),
       rawPreview: "",
     });
     toast(error.message, "error");
