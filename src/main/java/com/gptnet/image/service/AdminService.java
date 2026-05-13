@@ -340,7 +340,7 @@ public class AdminService {
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String model = Optional.ofNullable(body.getModel()).orElse("").trim();
     String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
-    String generationPath = Optional.ofNullable(body.getGenerationPath()).filter(s -> !s.isBlank()).orElse("/images/generations").trim();
+    String generationPath = generationPathForCallSquare(baseUrl);
     String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
     String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
     String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
@@ -806,6 +806,12 @@ public class AdminService {
     if (value == null) return "";
     int queryStart = value.indexOf('?');
     return queryStart >= 0 ? value.substring(0, queryStart) : value;
+  }
+
+  private String generationPathForCallSquare(String baseUrl) {
+    String normalized = Optional.ofNullable(baseUrl).orElse("").trim();
+    if (normalized.matches("(?i)^https?://.*/images/generations/?$")) return "";
+    return "/images/generations";
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {

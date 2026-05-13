@@ -2150,7 +2150,6 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       data.apiKey = String(data.apiKey || "").trim();
       data.model = String(data.model || "").trim();
       data.prompt = String(data.prompt || "").trim();
-      data.generationPath = String(data.generationPath || "").trim();
       data.upstreamGroup = String(data.upstreamGroup || "").trim();
       data.size = String(data.size || "1024x1024").trim();
       data.outputFormat = String(data.outputFormat || "png").trim();
