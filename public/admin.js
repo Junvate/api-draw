@@ -7,13 +7,14 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_CALL_SQUARE_CONFIG = {
-  url: "https://api.superapi.me/v1/chat/completions",
+  url: "https://api.superapi.me/v1/images/generations",
   apiKey: "",
   model: "gpt-image-2",
   prompt: "一张用于渠道测试的产品海报，干净背景，细节清晰",
   upstreamGroup: "",
   size: "1024x1024",
   outputFormat: "png",
+  quality: "low",
   background: "opaque",
   timeoutMs: 90000,
   apiKeyConfigured: false,
@@ -1747,6 +1748,7 @@ function callSquareFormData() {
     upstreamGroup: String(data.upstreamGroup || "").trim(),
     size: String(data.size || "1024x1024").trim(),
     outputFormat: String(data.outputFormat || "png").trim(),
+    quality: String(data.quality || "low").trim(),
     background: String(data.background || "opaque").trim(),
     timeoutMs: Number(data.timeoutMs || 90000),
   };
@@ -1765,6 +1767,7 @@ function applyCallSquareConfig(config = {}) {
     upstreamGroup: next.upstreamGroup,
     size: next.size,
     outputFormat: next.outputFormat,
+    quality: next.quality,
     background: next.background,
     timeoutMs: next.timeoutMs,
   }).forEach(([key, value]) => {

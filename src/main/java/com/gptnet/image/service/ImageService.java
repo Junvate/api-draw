@@ -515,16 +515,9 @@ public class ImageService {
   private GatewayResult callGatewayGeneration(ImageTask task, Gateway gateway, String apiKey, int n, int variantIndex) {
     String generationPath = Optional.ofNullable(gateway.generationPath()).filter(s -> !s.isBlank()).orElse("/images/generations");
     String upstreamGroup = Optional.ofNullable(gateway.upstreamGroup()).filter(s -> !s.isBlank()).orElse(groupForSize(task.size()));
-    Map<String, Object> body = Maps.of(
-      "model", task.model(),
-      "prompt", task.prompt(),
-      "size", task.size(),
-      "output_format", task.outputFormat(),
-      "background", task.background(),
-      "n", n
-    );
-    if (upstreamGroup != null) body.put("group", upstreamGroup);
     String url = upstreamUrl(gateway.baseUrl(), generationPath);
+    Map<String, Object> body = imageGenerationRequestBody(url, task, n);
+    if (upstreamGroup != null) body.put("group", upstreamGroup);
     UpstreamClient.UpstreamResponse response = upstream.json(url, "POST",
       Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(url, response.text());
@@ -548,6 +541,33 @@ public class ImageService {
     StoredImage first = stored.get(0);
     List<ExtraImage> extras = stored.stream().skip(1).map(s -> new ExtraImage(s.url(), s.storageKey(), s.sizeBytes(), s.hash())).toList();
     return new GatewayResult(first.url(), task.outputFormat(), null, null, first.storageKey(), first.sizeBytes(), first.hash(), extras);
+  }
+
+  private Map<String, Object> imageGenerationRequestBody(String url, ImageTask task, int n) {
+    String format = "jpg".equals(task.outputFormat()) ? "jpeg" : task.outputFormat();
+    if (isSuperApiImageGenerationUrl(url)) {
+      return Maps.of(
+        "model", task.model(),
+        "prompt", task.prompt(),
+        "size", task.size(),
+        "quality", task.quality(),
+        "format", format
+      );
+    }
+    return Maps.of(
+      "model", task.model(),
+      "prompt", task.prompt(),
+      "size", task.size(),
+      "quality", task.quality(),
+      "output_format", format,
+      "background", task.background(),
+      "n", n
+    );
+  }
+
+  private boolean isSuperApiImageGenerationUrl(String url) {
+    String normalized = Optional.ofNullable(url).orElse("").toLowerCase();
+    return normalized.contains("api.superapi.me") && normalized.contains("/images/generations");
   }
 
   private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n, int variantIndex) {

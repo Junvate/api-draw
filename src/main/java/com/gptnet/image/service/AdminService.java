@@ -35,8 +35,18 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdminService {
   private static final int DEFAULT_REDEMPTION_CODE_LENGTH = 16;
   private static final int MAX_REDEMPTION_BATCH_SIZE = 500;
+  private static final String DEFAULT_CALL_SQUARE_URL = "https://api.superapi.me/v1/images/generations";
+  private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
   private static final String CALL_SQUARE_API_KEY_KEY = "call_square_api_key";
+  private static final List<String> CALL_SQUARE_SIZES = List.of(
+    "1024x1024", "1536x1024", "1024x1536",
+    "2048x2048", "2048x1152",
+    "3840x2160", "2160x3840",
+    "auto"
+  );
+  private static final List<String> CALL_SQUARE_FORMATS = List.of("png", "jpeg", "jpg", "webp");
+  private static final List<String> CALL_SQUARE_QUALITIES = List.of("low", "medium", "high", "auto");
   private static final Pattern TEXT_URL_PATTERN = Pattern.compile("https?://[^\\s\"'<>，。)\\]}]+", Pattern.CASE_INSENSITIVE);
 
   private final Db db;
@@ -349,6 +359,7 @@ public class AdminService {
     String requestUrl = baseUrl;
     String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
     String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
+    String quality = normalizeCallSquareQuality(body.getQuality());
     String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
     String upstreamGroup = blankToNull(body.getUpstreamGroup());
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
@@ -365,14 +376,15 @@ public class AdminService {
     if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
     if (prompt.length() < 4) throw AppException.badRequest("PROMPT_TOO_SHORT", "提示词至少输入 4 个字");
     if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
-    if (!List.of("1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840").contains(size)) {
+    if (!CALL_SQUARE_SIZES.contains(size)) {
       throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
     }
-    if (!List.of("png", "jpeg", "jpg", "webp").contains(outputFormat)) {
+    if (!CALL_SQUARE_FORMATS.contains(outputFormat)) {
       throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
     }
+    if (!CALL_SQUARE_QUALITIES.contains(quality)) throw AppException.badRequest("INVALID_CALL_SQUARE_QUALITY", "图片画质不支持");
 
-    Map<String, Object> upstreamBody = callSquareRequestBody(requestUrl, model, prompt, size, outputFormat, background);
+    Map<String, Object> upstreamBody = callSquareRequestBody(requestUrl, model, prompt, size, outputFormat, quality, background);
     if (upstreamGroup != null) upstreamBody.put("group", upstreamGroup);
     long started = System.currentTimeMillis();
     try {
@@ -390,6 +402,7 @@ public class AdminService {
         "model", model,
         "prompt", prompt,
         "size", size,
+        "quality", quality,
         "image", image,
         "error", error,
         "rawPreview", truncate(response.text(), 2400)
@@ -438,12 +451,13 @@ public class AdminService {
     Map<String, Object> config = jsonMap(stored.get(CALL_SQUARE_CONFIG_KEY));
     String secret = security.decryptSecret(stored.get(CALL_SQUARE_API_KEY_KEY));
     Map<String, Object> result = new LinkedHashMap<>();
-    result.put("url", stringConfig(config, "url", "https://api.superapi.me/v1/chat/completions"));
+    result.put("url", normalizeCallSquareConfigUrl(stringConfig(config, "url", DEFAULT_CALL_SQUARE_URL)));
     result.put("model", stringConfig(config, "model", "gpt-image-2"));
     result.put("prompt", stringConfig(config, "prompt", "一张用于渠道测试的产品海报，干净背景，细节清晰"));
     result.put("upstreamGroup", stringConfig(config, "upstreamGroup", ""));
     result.put("size", stringConfig(config, "size", "1024x1024"));
     result.put("outputFormat", stringConfig(config, "outputFormat", "png"));
+    result.put("quality", stringConfig(config, "quality", "low"));
     result.put("background", stringConfig(config, "background", "opaque"));
     result.put("timeoutMs", intConfig(config, "timeoutMs", 90000));
     result.put("apiKey", secret == null ? "" : security.maskSecret(secret));
@@ -458,6 +472,7 @@ public class AdminService {
     String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
     String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
     String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
+    String quality = normalizeCallSquareQuality(body.getQuality());
     String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
     String upstreamGroup = Optional.ofNullable(body.getUpstreamGroup()).orElse("").trim();
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
@@ -466,12 +481,13 @@ public class AdminService {
     if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
     if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
     if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
-    if (!List.of("1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840").contains(size)) {
+    if (!CALL_SQUARE_SIZES.contains(size)) {
       throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
     }
-    if (!List.of("png", "jpeg", "jpg", "webp").contains(outputFormat)) {
+    if (!CALL_SQUARE_FORMATS.contains(outputFormat)) {
       throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
     }
+    if (!CALL_SQUARE_QUALITIES.contains(quality)) throw AppException.badRequest("INVALID_CALL_SQUARE_QUALITY", "图片画质不支持");
 
     Map<String, Object> config = Maps.of(
       "url", url,
@@ -480,6 +496,7 @@ public class AdminService {
       "upstreamGroup", upstreamGroup,
       "size", size,
       "outputFormat", outputFormat,
+      "quality", quality,
       "background", background,
       "timeoutMs", timeoutMs
     );
@@ -873,6 +890,22 @@ public class AdminService {
     return Optional.ofNullable(second).orElse("");
   }
 
+  private String normalizeCallSquareQuality(String value) {
+    if (value == null || value.isBlank()) return "low";
+    String normalized = value.trim();
+    if ("自动(1k)".equals(normalized) || "自动(2k)".equals(normalized)) return "auto";
+    if ("高清(2k)".equals(normalized)) return "medium";
+    if ("超清(4k)".equals(normalized)) return "high";
+    return normalized;
+  }
+
+  private String normalizeCallSquareConfigUrl(String value) {
+    if (LEGACY_CALL_SQUARE_URL.equalsIgnoreCase(Optional.ofNullable(value).orElse("").trim())) {
+      return DEFAULT_CALL_SQUARE_URL;
+    }
+    return value;
+  }
+
   private String safeEndpointForAudit(String value) {
     if (value == null) return "";
     int queryStart = value.indexOf('?');
@@ -885,6 +918,7 @@ public class AdminService {
     String prompt,
     String size,
     String outputFormat,
+    String quality,
     String background
   ) {
     if (requestUrl.toLowerCase().contains("/chat/completions")) {
@@ -894,14 +928,29 @@ public class AdminService {
         "stream", false
       );
     }
+    if (isSuperApiImageGenerationUrl(requestUrl)) {
+      return Maps.of(
+        "model", model,
+        "prompt", prompt,
+        "size", size,
+        "quality", quality,
+        "format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat
+      );
+    }
     return Maps.of(
       "model", model,
       "prompt", prompt,
       "size", size,
+      "quality", quality,
       "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
       "background", background,
       "n", 1
     );
+  }
+
+  private boolean isSuperApiImageGenerationUrl(String requestUrl) {
+    String normalized = Optional.ofNullable(requestUrl).orElse("").toLowerCase();
+    return normalized.contains("api.superapi.me") && normalized.contains("/images/generations");
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {

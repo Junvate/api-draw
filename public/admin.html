@@ -295,7 +295,7 @@
               <div class="call-square-body">
                 <form class="call-square-form" id="callSquareForm" autocomplete="off">
                   <label class="call-square-url">URL
-                    <input name="url" value="https://api.superapi.me/v1/chat/completions" placeholder="https://api.superapi.me/v1/chat/completions" inputmode="url" required />
+                    <input name="url" value="https://api.superapi.me/v1/images/generations" placeholder="https://api.superapi.me/v1/images/generations" inputmode="url" required />
                   </label>
                   <label>API Key
                     <input name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
@@ -313,9 +313,9 @@
                       <option value="1024x1536">1024x1536</option>
                       <option value="2048x2048">2048x2048</option>
                       <option value="2048x1152">2048x1152</option>
-                      <option value="1152x2048">1152x2048</option>
                       <option value="3840x2160">3840x2160</option>
                       <option value="2160x3840">2160x3840</option>
+                      <option value="auto">auto</option>
                     </select>
                   </label>
                   <label>格式
@@ -323,6 +323,14 @@
                       <option value="png">png</option>
                       <option value="jpeg">jpeg</option>
                       <option value="webp">webp</option>
+                    </select>
+                  </label>
+                  <label>画质
+                    <select name="quality">
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="auto">auto</option>
                     </select>
                   </label>
                   <label>背景

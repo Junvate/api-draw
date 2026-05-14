@@ -74,6 +74,8 @@ public final class AdminDtos {
     @Size(max = 40)
     private String outputFormat;
     @Size(max = 40)
+    private String quality;
+    @Size(max = 40)
     private String background;
     @Min(1000)
     @Max(600000)
@@ -95,6 +97,8 @@ public final class AdminDtos {
     public void setSize(String size) { this.size = size; }
     public String getOutputFormat() { return outputFormat; }
     public void setOutputFormat(String outputFormat) { this.outputFormat = outputFormat; }
+    public String getQuality() { return quality; }
+    public void setQuality(String quality) { this.quality = quality; }
     public String getBackground() { return background; }
     public void setBackground(String background) { this.background = background; }
     public Integer getTimeoutMs() { return timeoutMs; }
