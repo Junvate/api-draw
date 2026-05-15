@@ -24,6 +24,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +39,7 @@ public class ImageService {
   private final QueueService queue;
   private final StorageService storage;
   private final SensitiveWordService sensitiveWords;
+  private final TransactionTemplate transactions;
   private final String storageRoot;
   private final int failureThreshold;
   private final long cooldownMs;
@@ -50,6 +52,7 @@ public class ImageService {
     QueueService queue,
     StorageService storage,
     SensitiveWordService sensitiveWords,
+    TransactionTemplate transactions,
     @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot,
     @Value("${GATEWAY_FAILURE_THRESHOLD:30}") int failureThreshold,
     @Value("${GATEWAY_COOLDOWN_MS:300000}") long cooldownMs
@@ -61,6 +64,7 @@ public class ImageService {
     this.queue = queue;
     this.storage = storage;
     this.sensitiveWords = sensitiveWords;
+    this.transactions = transactions;
     this.storageRoot = storageRoot;
     this.failureThreshold = failureThreshold;
     this.cooldownMs = cooldownMs;
@@ -103,7 +107,6 @@ public class ImageService {
       """, Map.of("id", db.id()));
   }
 
-  @Transactional
   public ImageTask createTask(CreateTaskParams params) {
     String prompt = cleanFormString(params.dto().getPrompt()).trim();
     if (prompt.length() < 4) throw AppException.badRequest("PROMPT_TOO_SHORT", "提示词至少输入 4 个字");
@@ -116,11 +119,16 @@ public class ImageService {
     int unitCost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
     int imageCount = Math.max(1, Math.min(4, params.dto().getCount() == null ? 1 : params.dto().getCount()));
     int cost = unitCost * imageCount;
-    auth.lockUserWallet(params.userId());
-    if (db.walletBalance(params.userId()) < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足");
     List<MultipartFile> referenceFiles = validateReferenceFiles(params.referenceFiles());
     String taskId = db.id();
+    if (!referenceFiles.isEmpty()) persistReferenceImages(taskId, referenceFiles);
+    return transactions.execute(status -> createTaskRecord(params, taskId, gateway, prompt, normalizedSize, requestedQuality, imageCount, cost));
+  }
+
+  public ImageTask createTaskRecord(CreateTaskParams params, String taskId, Gateway gateway, String prompt, String normalizedSize, String requestedQuality, int imageCount, int cost) {
     try {
+      auth.lockUserWallet(params.userId());
+      if (db.walletBalance(params.userId()) < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足");
       db.jdbc().update("""
         INSERT INTO "ImageTask" (
           "id", "userId", "apiKeyId", "gatewayId", "requestId", "model", "prompt", "size",
@@ -144,23 +152,27 @@ public class ImageService {
         .addValue("background", Optional.of(cleanFormString(params.dto().getBackground())).filter(s -> !s.isBlank()).orElse("opaque"))
         .addValue("imageCount", imageCount)
         .addValue("costCredits", cost));
+      db.jdbc().update("""
+        INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
+        VALUES (:id, :userId, :amount, 'generation_hold'::"WalletEntryReason", :refId, :actorId)
+        """, new MapSqlParameterSource()
+        .addValue("id", db.id())
+        .addValue("userId", params.userId())
+        .addValue("amount", -cost)
+        .addValue("refId", taskId)
+        .addValue("actorId", params.userId()));
     } catch (DataIntegrityViolationException exception) {
       if (params.apiKeyId() != null && params.requestId() != null) {
+        cleanupReferenceImages(taskId);
         return db.imageTaskByApiKeyAndRequest(params.apiKeyId(), params.requestId()).map(db::hydrateTask).orElseThrow();
       }
+      cleanupReferenceImages(taskId);
+      throw exception;
+    } catch (RuntimeException exception) {
+      cleanupReferenceImages(taskId);
       throw exception;
     }
-    db.jdbc().update("""
-      INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
-      VALUES (:id, :userId, :amount, 'generation_hold'::"WalletEntryReason", :refId, :actorId)
-      """, new MapSqlParameterSource()
-      .addValue("id", db.id())
-      .addValue("userId", params.userId())
-      .addValue("amount", -cost)
-      .addValue("refId", taskId)
-      .addValue("actorId", params.userId()));
-    if (!referenceFiles.isEmpty()) persistReferenceImages(taskId, referenceFiles);
-    return db.hydrateTask(db.imageTaskById(taskId).orElseThrow());
+    return db.imageTaskById(taskId).orElseThrow();
   }
 
   public ImageTask queueTask(ImageTask task) {
@@ -346,7 +358,11 @@ public class ImageService {
   }
 
   public Map<String, Object> publicTask(ImageTask rawTask, String userId) {
-    ImageTask task = rawTask.results().isEmpty() ? db.hydrateTask(rawTask) : rawTask;
+    return publicTask(rawTask, userId, true);
+  }
+
+  public Map<String, Object> publicTask(ImageTask rawTask, String userId, boolean includeDetails) {
+    ImageTask task = includeDetails && rawTask.results().isEmpty() ? db.hydrateTask(rawTask) : rawTask;
     ImageResult first = task.results().isEmpty() ? null : task.results().get(0);
     String display = first == null ? null : "/api/images/" + task.id() + "/result";
     String download = first == null ? null : "/api/images/" + task.id() + "/download";
@@ -386,7 +402,7 @@ public class ImageService {
       "error", task.errorMessage(),
       "cost_credits", task.costCredits(),
       "costCredits", task.costCredits(),
-      "credits_remaining", db.walletBalance(userId),
+      "credits_remaining", includeDetails ? db.walletBalance(userId) : null,
       "created_at", task.createdAt(),
       "createdAt", task.createdAt(),
       "completed_at", task.finishedAt(),
@@ -665,6 +681,23 @@ public class ImageService {
       }
     } catch (IOException exception) {
       throw AppException.unavailable("REFERENCE_STORAGE_FAILED", "参考图保存失败，请检查存储目录权限");
+    }
+  }
+
+  private void cleanupReferenceImages(String taskId) {
+    try {
+      Path dir = Path.of(storageRoot, "references", taskId);
+      if (!Files.isDirectory(dir)) return;
+      try (var stream = Files.list(dir)) {
+        stream.forEach(path -> {
+          try {
+            Files.deleteIfExists(path);
+          } catch (IOException ignored) {
+          }
+        });
+      }
+      Files.deleteIfExists(dir);
+    } catch (IOException ignored) {
     }
   }
 

@@ -6,6 +6,7 @@ import com.gptnet.image.model.RedemptionCode;
 import com.gptnet.image.model.User;
 import com.gptnet.image.service.AuthService;
 import com.gptnet.image.service.Db;
+import com.gptnet.image.service.OutboundUrlPolicy;
 import com.gptnet.image.service.QueueService;
 import com.gptnet.image.support.AppException;
 import com.gptnet.image.support.Maps;
@@ -43,18 +44,22 @@ import org.springframework.web.bind.annotation.ResponseBody;
 
 @Controller
 public class OperationsController {
+  private static final int MAX_REMOTE_IMAGE_BYTES = 32 * 1024 * 1024;
+
   private final Db db;
   private final QueueService queue;
   private final AuthService auth;
   private final AdminService adminService;
+  private final OutboundUrlPolicy outboundUrlPolicy;
   private final String storageRoot;
-  private final HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+  private final HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
 
-  public OperationsController(Db db, QueueService queue, AuthService auth, AdminService adminService, @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot) {
+  public OperationsController(Db db, QueueService queue, AuthService auth, AdminService adminService, OutboundUrlPolicy outboundUrlPolicy, @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot) {
     this.db = db;
     this.queue = queue;
     this.auth = auth;
     this.adminService = adminService;
+    this.outboundUrlPolicy = outboundUrlPolicy;
     this.storageRoot = storageRoot;
   }
 
@@ -90,7 +95,7 @@ public class OperationsController {
       "redis", true,
       "gateway", Maps.of(
         "distributed", true,
-        "concurrency", integerEnv("GATEWAY_CONCURRENCY", 8),
+        "concurrency", integerEnv("IMAGE_WORKER_CONCURRENCY", 200),
         "active", counts.active(),
         "queued", counts.waiting() + counts.delayed()
       ),
@@ -304,24 +309,54 @@ public class OperationsController {
   }
 
   private ResponseEntity<?> proxyRemoteImage(String rawUrl, String format, String attachmentFilename) {
+    return proxyRemoteImage(rawUrl, format, attachmentFilename, 0);
+  }
+
+  private ResponseEntity<?> proxyRemoteImage(String rawUrl, String format, String attachmentFilename, int redirects) {
     try {
+      URI uri = outboundUrlPolicy.requirePublicHttpUrl(rawUrl);
       HttpResponse<InputStream> response = http.send(
-        HttpRequest.newBuilder(URI.create(rawUrl)).timeout(Duration.ofSeconds(30)).GET().build(),
+        HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(30)).GET().build(),
         HttpResponse.BodyHandlers.ofInputStream()
       );
+      if (isRedirect(response.statusCode()) && redirects < 3) {
+        String location = response.headers().firstValue("location").orElse("");
+        if (!location.isBlank()) {
+          URI next = uri.resolve(location);
+          return proxyRemoteImage(next.toString(), format, attachmentFilename, redirects + 1);
+        }
+      }
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
         return ResponseEntity.status(response.statusCode()).body("Remote image unavailable");
       }
-      byte[] body = response.body().readAllBytes();
+      Optional<String> contentType = response.headers().firstValue("content-type");
+      if (contentType.isPresent() && !contentType.orElse("").toLowerCase().startsWith("image/")) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("Remote image unavailable");
+      }
+      Optional<String> contentLength = response.headers().firstValue("content-length");
+      if (contentLength.isPresent() && Long.parseLong(contentLength.orElse("0")) > MAX_REMOTE_IMAGE_BYTES) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("Remote image too large");
+      }
+      byte[] body;
+      try (InputStream input = response.body()) {
+        body = input.readNBytes(MAX_REMOTE_IMAGE_BYTES + 1);
+      }
+      if (body.length > MAX_REMOTE_IMAGE_BYTES) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("Remote image too large");
+      }
       HttpHeaders headers = new HttpHeaders();
       headers.setCacheControl("public, max-age=14400");
-      headers.setContentType(response.headers().firstValue("content-type").map(MediaType::parseMediaType).orElse(mediaType(format)));
-      response.headers().firstValue("content-length").ifPresent(value -> headers.setContentLength(Long.parseLong(value)));
+      headers.setContentType(contentType.map(MediaType::parseMediaType).orElse(mediaType(format)));
+      headers.setContentLength(body.length);
       if (attachmentFilename != null) headers.setContentDisposition(contentDisposition(attachmentFilename));
       return new ResponseEntity<>(body, headers, HttpStatus.OK);
     } catch (Exception exception) {
       return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("Remote image unavailable");
     }
+  }
+
+  private boolean isRedirect(int status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
   }
 
   private String downloadFilename(String prompt, String format) {

@@ -86,7 +86,7 @@ public class ImageController {
     List<ImageTask> tasks = "admin".equals(user.role()) ? db.recentTasks(20) : db.recentTasksForUser(user.id(), 20);
     return Maps.of("jobs", tasks.stream().map(task -> {
       ImageTask hydrated = db.hydrateTask(task);
-      Map<String, Object> item = imageService.publicTask(hydrated, user.id());
+      Map<String, Object> item = imageService.publicTask(hydrated, user.id(), false);
       if (hydrated.user() != null) {
         item.put("ownerEmail", hydrated.user().email());
         item.put("ownerName", hydrated.user().name());
@@ -115,12 +115,13 @@ public class ImageController {
     User user = auth.validateSession(request);
     rateLimit.checkSessionGeneration(request, user.id());
     ImageTask task = imageService.createTask(new ImageService.CreateTaskParams(user.id(), null, null, body, files));
-    ImageTask returned = "async".equals(body.getResponse_mode()) ? imageService.queueTask(task) : imageService.processTask(task.id(), 1, 1);
-    if (returned != null && "failed".equals(returned.status()) && !"async".equals(body.getResponse_mode())) {
+    boolean sync = "sync".equalsIgnoreCase(String.valueOf(body.getResponse_mode()));
+    ImageTask returned = sync ? imageService.processTask(task.id(), 1, 1) : imageService.queueTask(task);
+    if (returned != null && "failed".equals(returned.status()) && sync) {
       throw AppException.unavailable(returned.errorCode() == null ? "GENERATION_FAILED" : returned.errorCode(), returned.errorMessage());
     }
     return Maps.of(
-      "job", imageService.publicTask(returned, user.id()),
+      "job", imageService.publicTask(returned, user.id(), sync),
       "credits", db.walletBalance(user.id())
     );
   }

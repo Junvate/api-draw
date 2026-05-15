@@ -1,7 +1,10 @@
 package com.gptnet.image.service;
 
 import com.gptnet.image.support.Json;
+import com.gptnet.image.support.AppException;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,14 +19,22 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class UpstreamClient {
+  private static final int MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+  private final OutboundUrlPolicy outboundUrlPolicy;
   private final HttpClient http = HttpClient.newBuilder()
-    .followRedirects(HttpClient.Redirect.NORMAL)
+    .followRedirects(HttpClient.Redirect.NEVER)
     .connectTimeout(Duration.ofSeconds(30))
     .build();
 
+  public UpstreamClient(OutboundUrlPolicy outboundUrlPolicy) {
+    this.outboundUrlPolicy = outboundUrlPolicy;
+  }
+
   public UpstreamResponse json(String rawUrl, String method, Map<String, String> headers, Object body, int timeoutMs) {
     try {
-      HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(rawUrl))
+      URI uri = outboundUrlPolicy.requirePublicHttpUrl(rawUrl);
+      HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
         .timeout(Duration.ofMillis(timeoutMs));
       headers.forEach(builder::header);
       if (body == null) {
@@ -33,8 +44,10 @@ public class UpstreamClient {
         builder.header("Content-Type", "application/json");
         builder.method(method == null ? "POST" : method, HttpRequest.BodyPublishers.ofByteArray(bytes));
       }
-      HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-      return parse(response.statusCode(), response.body());
+      HttpResponse<InputStream> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+      return parse(response.statusCode(), limitedUtf8(response.body(), MAX_JSON_RESPONSE_BYTES));
+    } catch (AppException exception) {
+      throw new UpstreamException("INVALID_UPSTREAM_URL", exception.getMessage(), 0, false);
     } catch (Exception exception) {
       throw UpstreamException.network(exception.getMessage());
     }
@@ -44,15 +57,18 @@ public class UpstreamClient {
     try {
       String boundary = "----gptnet-image-" + UUID.randomUUID().toString().replace("-", "");
       byte[] body = multipartBody(boundary, parts);
-      HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(rawUrl))
+      URI uri = outboundUrlPolicy.requirePublicHttpUrl(rawUrl);
+      HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
         .timeout(Duration.ofMillis(timeoutMs))
         .header("Content-Type", "multipart/form-data; boundary=" + boundary);
       headers.forEach(builder::header);
-      HttpResponse<String> response = http.send(
+      HttpResponse<InputStream> response = http.send(
         builder.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(),
-        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        HttpResponse.BodyHandlers.ofInputStream()
       );
-      return parse(response.statusCode(), response.body());
+      return parse(response.statusCode(), limitedUtf8(response.body(), MAX_JSON_RESPONSE_BYTES));
+    } catch (AppException exception) {
+      throw new UpstreamException("INVALID_UPSTREAM_URL", exception.getMessage(), 0, false);
     } catch (Exception exception) {
       throw UpstreamException.network(exception.getMessage());
     }
@@ -98,6 +114,14 @@ public class UpstreamClient {
 
   private String escape(String value) {
     return String.valueOf(value).replaceAll("[\\r\\n\"]", "_");
+  }
+
+  private String limitedUtf8(InputStream input, int maxBytes) throws IOException {
+    try (input) {
+      byte[] bytes = input.readNBytes(maxBytes + 1);
+      if (bytes.length > maxBytes) throw new IOException("Upstream response too large");
+      return new String(bytes, StandardCharsets.UTF_8);
+    }
   }
 
   public record UpstreamResponse(int status, boolean ok, Map<String, Object> payload, String text) {}

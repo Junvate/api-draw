@@ -131,11 +131,12 @@ public class PublicApiController {
       }
     }
     ImageTask task = imageService.createTask(new ImageService.CreateTaskParams(context.user().id(), context.apiKey().id(), requestId, body, files));
-    ImageTask returned = "async".equals(body.getResponse_mode()) ? imageService.queueTask(task) : imageService.processTask(task.id(), 1, 1);
-    if (returned != null && "failed".equals(returned.status()) && !"async".equals(body.getResponse_mode())) {
+    boolean sync = "sync".equalsIgnoreCase(String.valueOf(body.getResponse_mode()));
+    ImageTask returned = sync ? imageService.processTask(task.id(), 1, 1) : imageService.queueTask(task);
+    if (returned != null && "failed".equals(returned.status()) && sync) {
       throw AppException.unavailable(returned.errorCode() == null ? "GENERATION_FAILED" : returned.errorCode(), returned.errorMessage());
     }
-    return Maps.of("object", "image_generation.response", "data", imageService.publicTask(returned, context.user().id()));
+    return Maps.of("object", "image_generation.response", "data", imageService.publicTask(returned, context.user().id(), sync));
   }
 
   private CreateImageRequest multipartBody(String prompt, String model, String ratio, String size, String quality, String outputFormat, String background, Integer refs, String responseMode) {

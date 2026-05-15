@@ -18,6 +18,7 @@ public class RateLimitService {
   private final int authIdentityRpm;
   private final int adminAuthIpRpm;
   private final int adminAuthIdentityRpm;
+  private final boolean trustProxy;
 
   public RateLimitService(
     StringRedisTemplate redis,
@@ -28,7 +29,8 @@ public class RateLimitService {
     @Value("${AUTH_IP_RPM:20}") int authIpRpm,
     @Value("${AUTH_IDENTITY_RPM:6}") int authIdentityRpm,
     @Value("${ADMIN_AUTH_IP_RPM:10}") int adminAuthIpRpm,
-    @Value("${ADMIN_AUTH_IDENTITY_RPM:3}") int adminAuthIdentityRpm
+    @Value("${ADMIN_AUTH_IDENTITY_RPM:3}") int adminAuthIdentityRpm,
+    @Value("${TRUST_PROXY:false}") boolean trustProxy
   ) {
     this.redis = redis;
     this.keyPrefix = keyPrefix.endsWith(":") ? keyPrefix : keyPrefix + ":";
@@ -39,6 +41,7 @@ public class RateLimitService {
     this.authIdentityRpm = Math.max(1, authIdentityRpm);
     this.adminAuthIpRpm = Math.max(1, adminAuthIpRpm);
     this.adminAuthIdentityRpm = Math.max(1, adminAuthIdentityRpm);
+    this.trustProxy = trustProxy;
   }
 
   public void checkSessionGeneration(HttpServletRequest request, String userId) {
@@ -77,10 +80,17 @@ public class RateLimitService {
   }
 
   private String clientIp(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) return forwarded.split(",")[0].trim();
-    String realIp = request.getHeader("X-Real-IP");
-    if (realIp != null && !realIp.isBlank()) return realIp.trim();
+    if (trustProxy) {
+      String forwarded = request.getHeader("X-Forwarded-For");
+      if (forwarded != null && !forwarded.isBlank()) return sanitizeIp(forwarded.split(",")[0]);
+      String realIp = request.getHeader("X-Real-IP");
+      if (realIp != null && !realIp.isBlank()) return sanitizeIp(realIp);
+    }
     return request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+  }
+
+  private String sanitizeIp(String value) {
+    String text = value == null ? "" : value.trim();
+    return text.isBlank() ? "unknown" : text.replaceAll("[^A-Za-z0-9:.\\[\\]-]", "_");
   }
 }

@@ -56,13 +56,15 @@ public class AdminService {
   private final AuthService auth;
   private final ImageService imageService;
   private final UpstreamClient upstream;
+  private final OutboundUrlPolicy outboundUrlPolicy;
 
-  public AdminService(Db db, SecurityService security, AuthService auth, ImageService imageService, UpstreamClient upstream) {
+  public AdminService(Db db, SecurityService security, AuthService auth, ImageService imageService, UpstreamClient upstream, OutboundUrlPolicy outboundUrlPolicy) {
     this.db = db;
     this.security = security;
     this.auth = auth;
     this.imageService = imageService;
     this.upstream = upstream;
+    this.outboundUrlPolicy = outboundUrlPolicy;
   }
 
   public Map<String, Object> summary() {
@@ -360,7 +362,7 @@ public class AdminService {
     String upstreamGroup = blankToNull(body.getUpstreamGroup());
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
-    if (!baseUrl.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
+    requestUrl = outboundUrlPolicy.requirePublicHttpUrlString(baseUrl);
     boolean maskedApiKey = isMaskedSecret(apiKey);
     if (apiKey.isBlank() || maskedApiKey) {
       String savedApiKey = savedCallSquareApiKey();
@@ -466,7 +468,7 @@ public class AdminService {
     String upstreamGroup = Optional.ofNullable(body.getUpstreamGroup()).orElse("").trim();
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (url.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
-    if (!url.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
+    url = outboundUrlPolicy.requirePublicHttpUrlString(url);
     if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
     Map<String, Object> parsedBody = callSquareRequestBody(body);
     String model = callSquareString(parsedBody, "model", body.getModel());
@@ -931,9 +933,7 @@ public class AdminService {
 
   private void validateGatewayInput(GatewayRequest body, String apiKey) {
     String baseUrl = Optional.ofNullable(body.getBaseUrl()).orElse("").trim();
-    if (!baseUrl.isBlank() && !baseUrl.matches("(?i)^https?://.+")) {
-      throw AppException.badRequest("INVALID_GATEWAY_BASE_URL", "Base URL 必须是 http:// 或 https:// 地址");
-    }
+    if (!baseUrl.isBlank()) outboundUrlPolicy.requirePublicHttpUrl(baseUrl);
     if (apiKey != null && !apiKey.isBlank() && !isMaskedSecret(apiKey)) {
       if (apiKey.matches("(?i)^https?://.*")) {
         throw AppException.badRequest("INVALID_GATEWAY_API_KEY", "API Key 不能填写 URL，请填写渠道提供的 sk-... 密钥");
