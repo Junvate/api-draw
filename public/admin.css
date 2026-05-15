@@ -1250,6 +1250,10 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   height: 42px;
 }
 
+.call-square-form textarea {
+  font: 12px/1.55 "SF Mono", "Fira Code", Consolas, monospace;
+}
+
 .call-square-form button {
   height: 42px;
 }
@@ -1270,6 +1274,12 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 
 .call-square-prompt textarea {
   min-height: 112px;
+}
+
+.call-square-json textarea {
+  min-height: 300px;
+  white-space: pre;
+  overflow: auto;
 }
 
 .call-square-result {
@@ -1648,6 +1658,17 @@ td code {
 .cell-stack small, .muted {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.timing-cell strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.timing-cell small {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row-actions {
@@ -2426,10 +2447,46 @@ pre {
 .task-row-actions { justify-content: center; }
 
 .view[data-panel="jobs"] td:nth-child(6) {
+  min-width: 168px;
+}
+
+.view[data-panel="jobs"] td:nth-child(7) {
   max-width: 360px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.timing-breakdown {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.timing-breakdown div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.timing-breakdown span,
+.timing-breakdown strong {
+  display: block;
+}
+
+.timing-breakdown span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.timing-breakdown strong {
+  margin-top: 4px;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ============================================================
@@ -3017,10 +3074,11 @@ body.admin-sidebar-collapsed .side-footer button {
   .view[data-panel="jobs"] .data-table td:nth-child(3)::before { content: "模型"; }
   .view[data-panel="jobs"] .data-table td:nth-child(4)::before { content: "状态"; }
   .view[data-panel="jobs"] .data-table td:nth-child(5)::before { content: "积分"; }
-  .view[data-panel="jobs"] .data-table td:nth-child(6)::before { content: "提示词"; }
-  .view[data-panel="jobs"] .data-table td:nth-child(7)::before { content: "时间"; }
-  .view[data-panel="jobs"] .data-table td:nth-child(8)::before { content: "操作"; }
-  .view[data-panel="jobs"] td:nth-child(6) {
+  .view[data-panel="jobs"] .data-table td:nth-child(6)::before { content: "耗时"; }
+  .view[data-panel="jobs"] .data-table td:nth-child(7)::before { content: "提示词"; }
+  .view[data-panel="jobs"] .data-table td:nth-child(8)::before { content: "时间"; }
+  .view[data-panel="jobs"] .data-table td:nth-child(9)::before { content: "操作"; }
+  .view[data-panel="jobs"] td:nth-child(7) {
     max-width: none;
     white-space: normal;
     overflow: visible;

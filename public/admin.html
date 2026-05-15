@@ -300,51 +300,20 @@
                   <label>API Key
                     <input name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />
                   </label>
-                  <label>Model
-                    <input name="model" value="gpt-image-2" placeholder="gpt-image-2" required />
-                  </label>
                   <label>分组
                     <input name="upstreamGroup" placeholder="GPT-Image-2-2k" />
-                  </label>
-                  <label>尺寸
-                    <select name="size">
-                      <option value="1024x1024">1024x1024</option>
-                      <option value="1536x1024">1536x1024</option>
-                      <option value="1024x1536">1024x1536</option>
-                      <option value="2048x2048">2048x2048</option>
-                      <option value="2048x1152">2048x1152</option>
-                      <option value="3840x2160">3840x2160</option>
-                      <option value="2160x3840">2160x3840</option>
-                      <option value="auto">auto</option>
-                    </select>
-                  </label>
-                  <label>格式
-                    <select name="outputFormat">
-                      <option value="png">png</option>
-                      <option value="jpeg">jpeg</option>
-                      <option value="webp">webp</option>
-                    </select>
-                  </label>
-                  <label>画质
-                    <select name="quality">
-                      <option value="low">low</option>
-                      <option value="medium">medium</option>
-                      <option value="high">high</option>
-                      <option value="auto">auto</option>
-                    </select>
-                  </label>
-                  <label>背景
-                    <select name="background">
-                      <option value="opaque">opaque</option>
-                      <option value="transparent">transparent</option>
-                      <option value="auto">auto</option>
-                    </select>
                   </label>
                   <label>超时 ms
                     <input name="timeoutMs" type="number" value="90000" min="1000" max="600000" />
                   </label>
-                  <label class="call-square-prompt">提示词
-                    <textarea name="prompt" rows="5" placeholder="一张用于渠道测试的产品海报，干净背景，细节清晰" required>一张用于渠道测试的产品海报，干净背景，细节清晰</textarea>
+                  <label class="call-square-prompt call-square-json">请求参数 JSON
+                    <textarea name="requestBody" rows="12" spellcheck="false" required>{
+  "model": "gpt-image-2",
+  "prompt": "一张用于渠道测试的产品海报，干净背景，细节清晰",
+  "size": "1024x1024",
+  "quality": "low",
+  "format": "png"
+}</textarea>
                   </label>
                   <div class="call-square-actions">
                     <button class="primary" id="callSquareSubmit" type="submit">生成测试</button>
@@ -419,7 +388,7 @@
               </div>
               <div class="table-wrap">
                 <table class="data-table">
-                  <thead><tr><th>任务</th><th>用户</th><th>模型</th><th>状态</th><th>积分</th><th>提示词</th><th>时间</th><th>操作</th></tr></thead>
+                  <thead><tr><th>任务</th><th>用户</th><th>模型</th><th>状态</th><th>积分</th><th>耗时</th><th>提示词</th><th>时间</th><th>操作</th></tr></thead>
                   <tbody id="jobRows"></tbody>
                 </table>
               </div>

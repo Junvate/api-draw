@@ -77,6 +77,8 @@ public final class AdminDtos {
     private String quality;
     @Size(max = 40)
     private String background;
+    @Size(max = 100000)
+    private String requestBody;
     @Min(1000)
     @Max(600000)
     private Integer timeoutMs;
@@ -101,6 +103,8 @@ public final class AdminDtos {
     public void setQuality(String quality) { this.quality = quality; }
     public String getBackground() { return background; }
     public void setBackground(String background) { this.background = background; }
+    public String getRequestBody() { return requestBody; }
+    public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
     public Integer getTimeoutMs() { return timeoutMs; }
     public void setTimeoutMs(Integer timeoutMs) { this.timeoutMs = timeoutMs; }
   }

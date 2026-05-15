@@ -9,13 +9,14 @@ const STORAGE_KEYS = {
 const DEFAULT_CALL_SQUARE_CONFIG = {
   url: "https://api.superapi.me/v1/images/generations",
   apiKey: "",
-  model: "gpt-image-2",
-  prompt: "一张用于渠道测试的产品海报，干净背景，细节清晰",
   upstreamGroup: "",
-  size: "1024x1024",
-  outputFormat: "png",
-  quality: "low",
-  background: "opaque",
+  requestBody: `{
+  "model": "gpt-image-2",
+  "prompt": "一张用于渠道测试的产品海报，干净背景，细节清晰",
+  "size": "1024x1024",
+  "quality": "low",
+  "format": "png"
+}`,
   timeoutMs: 90000,
   apiKeyConfigured: false,
 };
@@ -350,6 +351,46 @@ function formatLatency(value) {
   if (value === null || value === undefined || value === "") return "-";
   const number = Number(value);
   return number >= 1000 ? `${(number / 1000).toFixed(1)}s` : `${number}ms`;
+}
+
+function jobTotalLatency(job) {
+  return job?.totalLatencyMs ?? job?.currentLatencyMs ?? job?.latencyMs ?? null;
+}
+
+function jobTimingReason(job) {
+  return job?.timingReason || job?.timing?.reason || "-";
+}
+
+function jobBottleneckLabel(value) {
+  return {
+    queue: "排队",
+    upstream: "上游",
+    gateway: "渠道",
+    storage: "存储",
+    timeout: "超时",
+    retry: "重试",
+    unknown: "未知",
+  }[String(value || "unknown")] || String(value || "-");
+}
+
+function percentile(values, ratio) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
+  return sorted[index];
+}
+
+function timingCell(job) {
+  const total = jobTotalLatency(job);
+  const queue = job.queueLatencyMs ?? job.timing?.queueMs;
+  const processing = job.processingLatencyMs ?? job.timing?.processingMs;
+  const bottleneck = job.timingBottleneck || job.timing?.bottleneck || "unknown";
+  return `
+    <div class="cell-stack timing-cell" title="${escapeHtml(jobTimingReason(job))}">
+      <strong>${escapeHtml(formatLatency(total))}</strong>
+      <small>${escapeHtml(jobBottleneckLabel(bottleneck))} · 队列 ${escapeHtml(formatLatency(queue))} · 处理 ${escapeHtml(formatLatency(processing))}</small>
+    </div>
+  `;
 }
 
 function adminJobResultUrl(job) {
@@ -1182,11 +1223,25 @@ function renderJobStats() {
   const counts = countBy(state.jobs, (job) => job.status || "unknown");
   const today = state.jobs.filter((job) => isWithin(job.createdAt, 24)).length;
   const credits = state.jobs.reduce((sum, job) => sum + Number(job.costCredits || 0), 0);
+  const returnedLatencies = state.jobs
+    .filter((job) => job.status === "succeeded" || job.status === "success" || job.resultUrl || job.timing?.hasResult)
+    .map((job) => job.totalLatencyMs ?? job.latencyMs)
+    .filter((value) => Number.isFinite(Number(value)) && Number(value) > 0)
+    .map(Number);
+  const avgLatency = returnedLatencies.length
+    ? Math.round(returnedLatencies.reduce((sum, value) => sum + value, 0) / returnedLatencies.length)
+    : null;
+  const p95Latency = percentile(returnedLatencies, 0.95);
+  const bottlenecks = countBy(
+    state.jobs.filter((job) => jobTimingReason(job) !== "-"),
+    (job) => job.timingBottleneck || job.timing?.bottleneck || "unknown"
+  );
+  const topBottleneck = Object.entries(bottlenecks).sort((a, b) => b[1] - a[1])[0]?.[0] || "unknown";
   $("jobStats").innerHTML = [
     statCard("任务总数", state.jobs.length, "最近列表范围"),
-    statCard("成功", counts.succeeded || 0, "已完成"),
-    statCard("失败", counts.failed || 0, "需关注"),
-    statCard("今日提交", today, `${credits} 积分消耗`),
+    statCard("平均返回耗时", formatLatency(avgLatency), `P95 ${formatLatency(p95Latency)}`),
+    statCard("主要慢点", jobBottleneckLabel(topBottleneck), `${bottlenecks[topBottleneck] || 0} 个任务`),
+    statCard("今日提交", today, `${counts.failed || 0} 失败 · ${credits} 积分`),
   ].join("");
 }
 
@@ -1205,11 +1260,12 @@ function renderJobs() {
       <td>${escapeHtml(job.model)}</td>
       <td>${statusBadge(job.status)}${job.status === "failed" && job.errorCode ? `<br><small style="color:var(--red,#e53e3e);font-size:11px">${escapeHtml(job.errorCode)}</small>` : ""}</td>
       <td>${Number(job.costCredits || 0)}</td>
+      <td>${timingCell(job)}</td>
       <td title="${escapeHtml(job.prompt || "")}">${escapeHtml(clip(job.prompt, 92))}${job.status === "failed" && job.errorMessage ? `<br><small style="color:var(--red,#e53e3e);font-size:11px" title="${escapeHtml(job.errorMessage)}">${escapeHtml(clip(job.errorMessage, 80))}</small>` : ""}</td>
       <td>${formatDate(job.createdAt)}</td>
       <td><div class="row-actions task-row-actions"><button class="icon-only" data-action="job-menu" aria-label="更多操作">···</button></div></td>
     </tr>
-  `).join("") || tableEmpty(8);
+  `).join("") || tableEmpty(9);
 }
 
 function filteredGalleryImages() {
@@ -1575,6 +1631,12 @@ function showJobDetail(id) {
   const job = state.jobs.find((item) => item.id === id);
   if (!job) return;
   const resultUrl = adminJobResultUrl(job);
+  const timing = job.timing || {};
+  const totalMs = jobTotalLatency(job);
+  const queueMs = job.queueLatencyMs ?? timing.queueMs;
+  const processingMs = job.processingLatencyMs ?? timing.processingMs;
+  const currentMs = job.currentLatencyMs ?? timing.currentMs;
+  const bottleneck = job.timingBottleneck || timing.bottleneck || "unknown";
   openDrawer(job.model || "绘图任务", job.id, `
     ${resultUrl ? `<a class="drawer-result" href="${escapeHtml(resultUrl)}" target="_blank" rel="noreferrer">打开生成结果</a>` : ""}
     ${resultUrl ? `
@@ -1595,9 +1657,22 @@ function showJobDetail(id) {
       ${fieldRow("质量", job.quality || "-")}
       ${fieldRow("积分", Number(job.costCredits || 0))}
       ${fieldRow("创建时间", formatDate(job.createdAt))}
+      ${fieldRow("开始处理", formatDate(job.startedAt))}
       ${fieldRow("完成时间", formatDate(job.completedAt))}
       ${fieldRow("错误码", job.errorCode || "-")}
       ${fieldRow("错误原因", job.errorMessage || "-")}
+    </div>
+    <div class="detail-section">
+      <h3>耗时诊断</h3>
+      <div class="timing-breakdown">
+        <div><span>总耗时</span><strong>${escapeHtml(formatLatency(totalMs))}</strong></div>
+        <div><span>排队等待</span><strong>${escapeHtml(formatLatency(queueMs))}</strong></div>
+        <div><span>生成处理</span><strong>${escapeHtml(formatLatency(processingMs))}</strong></div>
+        <div><span>当前耗时</span><strong>${escapeHtml(formatLatency(currentMs))}</strong></div>
+      </div>
+      ${fieldRow("主要慢点", jobBottleneckLabel(bottleneck))}
+      ${fieldRow("诊断原因", jobTimingReason(job))}
+      ${fieldRow("重试", `${Number(job.retryCount || 0)}/${Number(job.maxRetries || 0)}`)}
     </div>
     <div class="detail-section">
       <h3>提示词</h3>
@@ -1737,19 +1812,44 @@ function callSquareRequestUrl(rawUrl) {
   return String(rawUrl || "").trim();
 }
 
+function parseCallSquareRequestBody(raw) {
+  const text = String(raw || "").trim();
+  if (!text) throw new Error("请求参数 JSON 不能为空");
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("请求参数必须是合法 JSON");
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("请求参数 JSON 必须是对象");
+  }
+  return parsed;
+}
+
+function prettyCallSquareRequestBody(value) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return DEFAULT_CALL_SQUARE_CONFIG.requestBody;
+    try {
+      return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      return text;
+    }
+  }
+  if (value && typeof value === "object") return JSON.stringify(value, null, 2);
+  return DEFAULT_CALL_SQUARE_CONFIG.requestBody;
+}
+
 function callSquareFormData() {
   const form = $("callSquareForm");
   const data = formData(form);
+  const requestBody = prettyCallSquareRequestBody(data.requestBody || DEFAULT_CALL_SQUARE_CONFIG.requestBody);
   return {
     url: callSquareRequestUrl(data.url),
     apiKey: String(data.apiKey || "").trim(),
-    model: String(data.model || "").trim(),
-    prompt: String(data.prompt || "").trim(),
     upstreamGroup: String(data.upstreamGroup || "").trim(),
-    size: String(data.size || "1024x1024").trim(),
-    outputFormat: String(data.outputFormat || "png").trim(),
-    quality: String(data.quality || "low").trim(),
-    background: String(data.background || "opaque").trim(),
+    requestBody,
     timeoutMs: Number(data.timeoutMs || 90000),
   };
 }
@@ -1762,13 +1862,8 @@ function applyCallSquareConfig(config = {}) {
   Object.entries({
     url: next.url,
     apiKey: next.apiKey || "",
-    model: next.model,
-    prompt: next.prompt,
     upstreamGroup: next.upstreamGroup,
-    size: next.size,
-    outputFormat: next.outputFormat,
-    quality: next.quality,
-    background: next.background,
+    requestBody: prettyCallSquareRequestBody(next.requestBody),
     timeoutMs: next.timeoutMs,
   }).forEach(([key, value]) => {
     if (form.elements[key]) form.elements[key].value = value ?? "";
@@ -1783,7 +1878,9 @@ async function loadCallSquareConfig() {
 
 async function saveCallSquareConfig(button) {
   await withBusy(button, "保存中", async () => {
-    const payload = await api("/api/admin/call-square/config", { method: "PATCH", body: JSON.stringify(callSquareFormData()) });
+    const data = callSquareFormData();
+    parseCallSquareRequestBody(data.requestBody);
+    const payload = await api("/api/admin/call-square/config", { method: "PATCH", body: JSON.stringify(data) });
     applyCallSquareConfig(payload.config || {});
   });
   toast("调用配置已保存", "success");
@@ -1825,6 +1922,7 @@ function renderCallSquareResult(result) {
       ${result.error ? `<div class="call-square-error">${escapeHtml(result.error)}</div>` : ""}
       ${result.prompt ? `<div class="call-square-prompt-preview">${escapeHtml(result.prompt)}</div>` : ""}
       ${imageUrl ? `<button class="small" data-action="copy-call-square-image" data-url="${escapeHtml(imageUrl)}" type="button">复制图片地址</button>` : ""}
+      ${result.requestBody ? `<details class="call-square-raw"><summary>请求参数</summary><pre>${escapeHtml(JSON.stringify(result.requestBody, null, 2))}</pre></details>` : ""}
       ${result.rawPreview ? `<details class="call-square-raw"><summary>原始返回</summary><pre>${escapeHtml(result.rawPreview)}</pre></details>` : ""}
     </div>
   `;
@@ -2228,8 +2326,7 @@ $("callSquareForm").addEventListener("submit", async (event) => {
     await withBusy(button, "测试中", async () => {
       const data = callSquareFormData();
       validateGatewayPayload({ baseUrl: data.url, apiKey: data.apiKey });
-      if (!data.model) throw new Error("Model 不能为空");
-      if (data.prompt.length < 4) throw new Error("提示词至少输入 4 个字");
+      parseCallSquareRequestBody(data.requestBody);
       const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(data) });
       renderCallSquareResult(result);
       toast(result.ok ? "生成成功" : (result.error || "生成失败"), result.ok ? "success" : "error");
@@ -2239,9 +2336,9 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       ok: false,
       status: 0,
       latencyMs: 0,
-      model: form.elements.model?.value || "",
-      prompt: form.elements.prompt?.value || "",
-      size: form.elements.size?.value || "",
+      model: "",
+      prompt: "",
+      size: "",
       image: null,
       error: error.message,
       url: callSquareRequestUrl(form.elements.url?.value || ""),

@@ -15,6 +15,7 @@ import com.gptnet.image.support.Ids;
 import com.gptnet.image.support.Json;
 import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -39,14 +40,15 @@ public class AdminService {
   private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
   private static final String CALL_SQUARE_API_KEY_KEY = "call_square_api_key";
-  private static final List<String> CALL_SQUARE_SIZES = List.of(
-    "1024x1024", "1536x1024", "1024x1536",
-    "2048x2048", "2048x1152",
-    "3840x2160", "2160x3840",
-    "auto"
-  );
-  private static final List<String> CALL_SQUARE_FORMATS = List.of("png", "jpeg", "jpg", "webp");
-  private static final List<String> CALL_SQUARE_QUALITIES = List.of("low", "medium", "high", "auto");
+  private static final String DEFAULT_CALL_SQUARE_REQUEST_BODY = """
+    {
+      "model": "gpt-image-2",
+      "prompt": "一张用于渠道测试的产品海报，干净背景，细节清晰",
+      "size": "1024x1024",
+      "quality": "low",
+      "format": "png"
+    }
+    """;
   private static final Pattern TEXT_URL_PATTERN = Pattern.compile("https?://[^\\s\"'<>，。)\\]}]+", Pattern.CASE_INSENSITIVE);
 
   private final Db db;
@@ -354,13 +356,7 @@ public class AdminService {
   public Map<String, Object> callSquareTest(User actor, HttpServletRequest request, CallSquareTestRequest body) {
     String baseUrl = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
-    String model = Optional.ofNullable(body.getModel()).orElse("").trim();
-    String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
     String requestUrl = baseUrl;
-    String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
-    String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
-    String quality = normalizeCallSquareQuality(body.getQuality());
-    String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
     String upstreamGroup = blankToNull(body.getUpstreamGroup());
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
@@ -373,19 +369,16 @@ public class AdminService {
     }
     if (apiKey.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "API Key 不能为空");
     if (apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
-    if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
-    if (prompt.length() < 4) throw AppException.badRequest("PROMPT_TOO_SHORT", "提示词至少输入 4 个字");
-    if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
-    if (!CALL_SQUARE_SIZES.contains(size)) {
-      throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
-    }
-    if (!CALL_SQUARE_FORMATS.contains(outputFormat)) {
-      throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
-    }
-    if (!CALL_SQUARE_QUALITIES.contains(quality)) throw AppException.badRequest("INVALID_CALL_SQUARE_QUALITY", "图片画质不支持");
-
-    Map<String, Object> upstreamBody = callSquareRequestBody(requestUrl, model, prompt, size, outputFormat, quality, background);
+    Map<String, Object> upstreamBody = callSquareRequestBody(body);
     if (upstreamGroup != null) upstreamBody.put("group", upstreamGroup);
+    String model = callSquareString(upstreamBody, "model", body.getModel());
+    String prompt = callSquareString(upstreamBody, "prompt", body.getPrompt());
+    String size = callSquareString(upstreamBody, "size", body.getSize());
+    String quality = callSquareString(upstreamBody, "quality", body.getQuality());
+    String outputFormat = callSquareString(upstreamBody, "format", callSquareString(upstreamBody, "output_format", body.getOutputFormat()));
+    if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
+    if (outputFormat.isBlank()) outputFormat = "png";
+
     long started = System.currentTimeMillis();
     try {
       var response = upstream.json(requestUrl, "POST", Map.of("Authorization", "Bearer " + apiKey), upstreamBody, timeoutMs);
@@ -403,11 +396,12 @@ public class AdminService {
         "prompt", prompt,
         "size", size,
         "quality", quality,
+        "requestBody", upstreamBody,
         "image", image,
         "error", error,
         "rawPreview", truncate(response.text(), 2400)
       );
-      audit(actor, request, "call_square.test", model, Maps.of(
+      audit(actor, request, "call_square.test", model.isBlank() ? "custom-request" : model, Maps.of(
         "ok", ok,
         "status", response.status(),
         "latencyMs", latencyMs,
@@ -415,13 +409,14 @@ public class AdminService {
         "model", model,
         "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
+        "requestBodyPreview", truncate(jsonPreview(upstreamBody), 1200),
         "hasImage", image != null
       ));
       return result;
     } catch (Exception exception) {
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
       String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
-      audit(actor, request, "call_square.test", model, Maps.of(
+      audit(actor, request, "call_square.test", model.isBlank() ? "custom-request" : model, Maps.of(
         "ok", false,
         "status", 0,
         "latencyMs", latencyMs,
@@ -429,6 +424,7 @@ public class AdminService {
         "model", model,
         "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
+        "requestBodyPreview", truncate(jsonPreview(upstreamBody), 1200),
         "error", truncate(message, 500)
       ));
       return Maps.of(
@@ -439,6 +435,8 @@ public class AdminService {
         "model", model,
         "prompt", prompt,
         "size", size,
+        "quality", quality,
+        "requestBody", upstreamBody,
         "image", null,
         "error", message,
         "rawPreview", ""
@@ -450,15 +448,12 @@ public class AdminService {
     Map<String, String> stored = siteSettings(CALL_SQUARE_CONFIG_KEY, CALL_SQUARE_API_KEY_KEY);
     Map<String, Object> config = jsonMap(stored.get(CALL_SQUARE_CONFIG_KEY));
     String secret = security.decryptSecret(stored.get(CALL_SQUARE_API_KEY_KEY));
+    String requestBody = stringConfig(config, "requestBody", "");
+    if (requestBody.isBlank()) requestBody = legacyCallSquareRequestBody(config);
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("url", normalizeCallSquareConfigUrl(stringConfig(config, "url", DEFAULT_CALL_SQUARE_URL)));
-    result.put("model", stringConfig(config, "model", "gpt-image-2"));
-    result.put("prompt", stringConfig(config, "prompt", "一张用于渠道测试的产品海报，干净背景，细节清晰"));
     result.put("upstreamGroup", stringConfig(config, "upstreamGroup", ""));
-    result.put("size", stringConfig(config, "size", "1024x1024"));
-    result.put("outputFormat", stringConfig(config, "outputFormat", "png"));
-    result.put("quality", stringConfig(config, "quality", "low"));
-    result.put("background", stringConfig(config, "background", "opaque"));
+    result.put("requestBody", requestBody);
     result.put("timeoutMs", intConfig(config, "timeoutMs", 90000));
     result.put("apiKey", secret == null ? "" : security.maskSecret(secret));
     result.put("apiKeyConfigured", secret != null && !secret.isBlank());
@@ -468,36 +463,21 @@ public class AdminService {
   public Map<String, Object> saveCallSquareConfig(User actor, HttpServletRequest request, CallSquareTestRequest body) {
     String url = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
-    String model = Optional.ofNullable(body.getModel()).orElse("").trim();
-    String prompt = Optional.ofNullable(body.getPrompt()).orElse("").trim();
-    String size = Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim();
-    String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
-    String quality = normalizeCallSquareQuality(body.getQuality());
-    String background = Optional.ofNullable(body.getBackground()).filter(s -> !s.isBlank()).orElse("opaque").trim();
     String upstreamGroup = Optional.ofNullable(body.getUpstreamGroup()).orElse("").trim();
     int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
     if (url.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     if (!url.matches("(?i)^https?://.+")) throw AppException.badRequest("INVALID_CALL_SQUARE_URL", "URL 必须是 http:// 或 https:// 地址");
     if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
-    if (model.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "Model 不能为空");
-    if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
-    if (!CALL_SQUARE_SIZES.contains(size)) {
-      throw AppException.badRequest("INVALID_CALL_SQUARE_SIZE", "图片尺寸不支持");
-    }
-    if (!CALL_SQUARE_FORMATS.contains(outputFormat)) {
-      throw AppException.badRequest("INVALID_CALL_SQUARE_OUTPUT_FORMAT", "输出格式不支持");
-    }
-    if (!CALL_SQUARE_QUALITIES.contains(quality)) throw AppException.badRequest("INVALID_CALL_SQUARE_QUALITY", "图片画质不支持");
+    Map<String, Object> parsedBody = callSquareRequestBody(body);
+    String model = callSquareString(parsedBody, "model", body.getModel());
+    String prompt = callSquareString(parsedBody, "prompt", body.getPrompt());
+    if (!prompt.isBlank() && prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
+    String requestBody = jsonPreview(parsedBody);
 
     Map<String, Object> config = Maps.of(
       "url", url,
-      "model", model,
-      "prompt", prompt,
       "upstreamGroup", upstreamGroup,
-      "size", size,
-      "outputFormat", outputFormat,
-      "quality", quality,
-      "background", background,
+      "requestBody", requestBody,
       "timeoutMs", timeoutMs
     );
     try {
@@ -508,11 +488,12 @@ public class AdminService {
     if (!apiKey.isBlank() && !isMaskedSecret(apiKey)) {
       saveSiteSetting(CALL_SQUARE_API_KEY_KEY, security.encryptSecret(apiKey));
     }
-    audit(actor, request, "call_square.config.save", model, Maps.of(
+    audit(actor, request, "call_square.config.save", model.isBlank() ? "custom-request" : model, Maps.of(
       "url", safeEndpointForAudit(url),
       "model", model,
       "hasApiKey", !apiKey.isBlank(),
-      "upstreamGroup", upstreamGroup
+      "upstreamGroup", upstreamGroup,
+      "requestBodyPreview", truncate(requestBody, 1200)
     ));
     return getCallSquareConfig();
   }
@@ -520,7 +501,9 @@ public class AdminService {
   public Map<String, Object> jobs(int rawLimit) {
     int limit = Math.min(Math.max(rawLimit, 1), 500);
     List<ImageTask> tasks = db.recentTasks(limit).stream().map(db::hydrateTask).toList();
+    Instant now = Instant.now();
     return Maps.of("jobs", tasks.stream().map(task -> {
+      Map<String, Object> timing = taskTiming(task, now);
       Map<String, Object> item = Maps.of(
         "id", task.id(),
         "userId", task.userId(),
@@ -543,8 +526,17 @@ public class AdminService {
         "maxRetries", task.maxRetries(),
         "costCredits", task.costCredits(),
         "latencyMs", task.latencyMs(),
+        "totalLatencyMs", timing.get("totalMs"),
+        "queueLatencyMs", timing.get("queueMs"),
+        "processingLatencyMs", timing.get("processingMs"),
+        "currentLatencyMs", timing.get("currentMs"),
+        "timingPhase", timing.get("phase"),
+        "timingBottleneck", timing.get("bottleneck"),
+        "timingReason", timing.get("reason"),
+        "timing", timing,
         "startedAt", task.startedAt(),
         "finishedAt", task.finishedAt(),
+        "completedAt", task.finishedAt(),
         "createdAt", task.createdAt(),
         "updatedAt", task.updatedAt(),
         "resultUrl", task.results().isEmpty() ? null : task.results().get(0).url(),
@@ -553,6 +545,90 @@ public class AdminService {
       );
       return item;
     }).toList());
+  }
+
+  private Map<String, Object> taskTiming(ImageTask task, Instant now) {
+    Instant createdAt = task.createdAt();
+    Instant startedAt = task.startedAt();
+    Instant finishedAt = task.finishedAt();
+    boolean terminal = finishedAt != null || List.of("success", "failed", "blocked", "timeout", "cancelled").contains(task.status());
+    Instant effectiveEnd = finishedAt == null && !terminal ? now : finishedAt;
+    Long totalMs = millisBetween(createdAt, effectiveEnd);
+    Long queueMs = startedAt == null
+      ? ("queued".equals(task.status()) || finishedAt != null ? millisBetween(createdAt, effectiveEnd) : null)
+      : millisBetween(createdAt, startedAt);
+    Long processingMs = startedAt == null ? null : millisBetween(startedAt, effectiveEnd);
+    if (processingMs == null && task.latencyMs() != null) processingMs = task.latencyMs().longValue();
+    Long currentMs = terminal ? null : millisBetween(createdAt, now);
+    String phase = timingPhase(task, startedAt, finishedAt);
+    String bottleneck = timingBottleneck(task, queueMs, processingMs);
+    String reason = timingReason(task, phase, bottleneck, queueMs, processingMs);
+    return Maps.of(
+      "submittedAt", createdAt,
+      "startedAt", startedAt,
+      "returnedAt", finishedAt,
+      "totalMs", totalMs,
+      "queueMs", queueMs,
+      "processingMs", processingMs,
+      "currentMs", currentMs,
+      "phase", phase,
+      "bottleneck", bottleneck,
+      "reason", reason,
+      "retryCount", task.retryCount(),
+      "maxRetries", task.maxRetries(),
+      "errorCode", task.errorCode(),
+      "hasResult", task.results() != null && !task.results().isEmpty()
+    );
+  }
+
+  private Long millisBetween(Instant start, Instant end) {
+    if (start == null || end == null || end.isBefore(start)) return null;
+    return Duration.between(start, end).toMillis();
+  }
+
+  private String timingPhase(ImageTask task, Instant startedAt, Instant finishedAt) {
+    if ("queued".equals(task.status()) && startedAt == null) return "queued";
+    if ("processing".equals(task.status()) || ("queued".equals(task.status()) && startedAt != null && finishedAt == null)) return "processing";
+    if ("success".equals(task.status())) return "completed";
+    if ("failed".equals(task.status())) return "failed";
+    if ("blocked".equals(task.status())) return "blocked";
+    if ("timeout".equals(task.status())) return "timeout";
+    if ("cancelled".equals(task.status())) return "cancelled";
+    return task.status() == null ? "unknown" : task.status();
+  }
+
+  private String timingBottleneck(ImageTask task, Long queueMs, Long processingMs) {
+    String code = task.errorCode() == null ? "" : task.errorCode().toUpperCase();
+    if (code.contains("QUEUE")) return "queue";
+    if (code.contains("GATEWAY")) return "gateway";
+    if (code.contains("STORAGE")) return "storage";
+    if (code.contains("TIMEOUT")) return "timeout";
+    if (code.contains("UPSTREAM") || code.contains("HTTP") || code.contains("NETWORK")) return "upstream";
+    if (task.retryCount() > 0) return "retry";
+    long q = queueMs == null ? 0 : queueMs;
+    long p = processingMs == null ? 0 : processingMs;
+    if (q > 5000 && q >= p) return "queue";
+    if (p > 0) return "upstream";
+    return "unknown";
+  }
+
+  private String timingReason(ImageTask task, String phase, String bottleneck, Long queueMs, Long processingMs) {
+    String code = task.errorCode() == null ? "" : task.errorCode().toUpperCase();
+    if ("queued".equals(phase)) return "等待 worker 或上游并发名额";
+    if ("processing".equals(phase)) return "上游正在生成或结果正在写入";
+    if (code.contains("QUEUE_OVERLOADED")) return "队列已满，提交后无法入队";
+    if (code.contains("QUEUE")) return "队列不可用或入队失败";
+    if (code.contains("GATEWAY_UNAVAILABLE")) return "渠道停用、冷却或不可调度";
+    if (code.contains("STORAGE")) return "图片返回后本地/对象存储失败";
+    if (code.contains("TIMEOUT")) return "上游响应超时";
+    if (code.contains("UPSTREAM_EMPTY")) return "上游成功响应但没有图片结果";
+    if (code.contains("UPSTREAM") || code.contains("HTTP") || code.contains("NETWORK")) return "上游接口错误或网络异常";
+    if (task.retryCount() > 0) return "经历重试，耗时包含退避等待";
+    if ("queue".equals(bottleneck)) return "主要耗时在排队等待";
+    if ("upstream".equals(bottleneck) && processingMs != null) return "主要耗时在上游生成和结果持久化";
+    if ("completed".equals(phase)) return "正常完成";
+    if ("failed".equals(phase)) return "失败原因见错误码和错误信息";
+    return "暂无足够分段信息";
   }
 
   public Map<String, Object> gallery(int rawLimit, int rawOffset) {
@@ -890,15 +966,6 @@ public class AdminService {
     return Optional.ofNullable(second).orElse("");
   }
 
-  private String normalizeCallSquareQuality(String value) {
-    if (value == null || value.isBlank()) return "low";
-    String normalized = value.trim();
-    if ("自动(1k)".equals(normalized) || "自动(2k)".equals(normalized)) return "auto";
-    if ("高清(2k)".equals(normalized)) return "medium";
-    if ("超清(4k)".equals(normalized)) return "high";
-    return normalized;
-  }
-
   private String normalizeCallSquareConfigUrl(String value) {
     if (LEGACY_CALL_SQUARE_URL.equalsIgnoreCase(Optional.ofNullable(value).orElse("").trim())) {
       return DEFAULT_CALL_SQUARE_URL;
@@ -912,45 +979,62 @@ public class AdminService {
     return queryStart >= 0 ? value.substring(0, queryStart) : value;
   }
 
-  private Map<String, Object> callSquareRequestBody(
-    String requestUrl,
-    String model,
-    String prompt,
-    String size,
-    String outputFormat,
-    String quality,
-    String background
-  ) {
-    if (requestUrl.toLowerCase().contains("/chat/completions")) {
-      return Maps.of(
-        "model", model,
-        "messages", List.of(Maps.of("role", "user", "content", prompt)),
-        "stream", false
-      );
+  private Map<String, Object> callSquareRequestBody(CallSquareTestRequest body) {
+    String raw = Optional.ofNullable(body.getRequestBody()).orElse("").trim();
+    if (raw.isBlank()) {
+      if (hasLegacyCallSquareFields(body)) return legacyCallSquareRequestBody(body);
+      raw = DEFAULT_CALL_SQUARE_REQUEST_BODY;
     }
-    if (isSuperApiImageGenerationUrl(requestUrl)) {
-      return Maps.of(
-        "model", model,
-        "prompt", prompt,
-        "size", size,
-        "quality", quality,
-        "format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat
-      );
+    try {
+      Map<String, Object> parsed = Json.MAPPER.readValue(raw, Json.MAP);
+      return new LinkedHashMap<>(parsed);
+    } catch (Exception exception) {
+      throw AppException.badRequest("INVALID_CALL_SQUARE_REQUEST_BODY", "请求参数必须是合法 JSON 对象");
     }
-    return Maps.of(
-      "model", model,
-      "prompt", prompt,
-      "size", size,
-      "quality", quality,
-      "output_format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat,
-      "background", background,
-      "n", 1
-    );
   }
 
-  private boolean isSuperApiImageGenerationUrl(String requestUrl) {
-    String normalized = Optional.ofNullable(requestUrl).orElse("").toLowerCase();
-    return normalized.contains("api.superapi.me") && normalized.contains("/images/generations");
+  private boolean hasLegacyCallSquareFields(CallSquareTestRequest body) {
+    return !Optional.ofNullable(body.getModel()).orElse("").isBlank()
+      || !Optional.ofNullable(body.getPrompt()).orElse("").isBlank()
+      || !Optional.ofNullable(body.getSize()).orElse("").isBlank()
+      || !Optional.ofNullable(body.getQuality()).orElse("").isBlank()
+      || !Optional.ofNullable(body.getOutputFormat()).orElse("").isBlank();
+  }
+
+  private String callSquareString(Map<String, Object> body, String key, String fallback) {
+    Object value = body.get(key);
+    if (value == null) return Optional.ofNullable(fallback).orElse("").trim();
+    return String.valueOf(value).trim();
+  }
+
+  private Map<String, Object> legacyCallSquareRequestBody(CallSquareTestRequest body) {
+    Map<String, Object> requestBody = new LinkedHashMap<>();
+    requestBody.put("model", Optional.ofNullable(body.getModel()).filter(s -> !s.isBlank()).orElse("gpt-image-2").trim());
+    requestBody.put("prompt", Optional.ofNullable(body.getPrompt()).filter(s -> !s.isBlank()).orElse("一张用于渠道测试的产品海报，干净背景，细节清晰").trim());
+    requestBody.put("size", Optional.ofNullable(body.getSize()).filter(s -> !s.isBlank()).orElse("1024x1024").trim());
+    requestBody.put("quality", Optional.ofNullable(body.getQuality()).filter(s -> !s.isBlank()).orElse("low").trim());
+    String outputFormat = Optional.ofNullable(body.getOutputFormat()).filter(s -> !s.isBlank()).orElse("png").trim();
+    requestBody.put("format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat);
+    return requestBody;
+  }
+
+  private String legacyCallSquareRequestBody(Map<String, Object> config) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("model", stringConfig(config, "model", "gpt-image-2"));
+    body.put("prompt", stringConfig(config, "prompt", "一张用于渠道测试的产品海报，干净背景，细节清晰"));
+    body.put("size", stringConfig(config, "size", "1024x1024"));
+    body.put("quality", stringConfig(config, "quality", "low"));
+    String outputFormat = stringConfig(config, "outputFormat", "png");
+    body.put("format", "jpg".equals(outputFormat) ? "jpeg" : outputFormat);
+    return jsonPreview(body);
+  }
+
+  private String jsonPreview(Object value) {
+    try {
+      return Json.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(value);
+    } catch (Exception exception) {
+      return String.valueOf(value);
+    }
   }
 
   private Stream<String> modelIds(Map<String, Object> payload) {
