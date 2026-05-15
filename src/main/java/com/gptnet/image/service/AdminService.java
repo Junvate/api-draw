@@ -388,7 +388,12 @@ public class AdminService {
       Map<String, Object> image = firstImageResult(response.payload(), outputFormat);
       String error = response.ok() ? null : upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status());
       boolean ok = response.ok() && image != null;
-      if (response.ok() && image == null) error = "上游没有返回图片结果";
+      String errorCode = null;
+      if (!response.ok()) errorCode = UpstreamException.fromHttp(response.status(), error).code();
+      if (response.ok() && image == null) {
+        error = "上游没有返回图片结果";
+        errorCode = "UPSTREAM_EMPTY_RESULT";
+      }
       Map<String, Object> result = Maps.of(
         "ok", ok,
         "status", response.status(),
@@ -400,6 +405,7 @@ public class AdminService {
         "quality", quality,
         "requestBody", upstreamBody,
         "image", image,
+        "errorCode", errorCode,
         "error", error,
         "rawPreview", truncate(response.text(), 2400)
       );
@@ -418,9 +424,11 @@ public class AdminService {
     } catch (Exception exception) {
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
       String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
+      String errorCode = exception instanceof UpstreamException upstreamException ? upstreamException.code() : "CALL_SQUARE_REQUEST_FAILED";
+      int upstreamStatus = exception instanceof UpstreamException upstreamException ? upstreamException.status() : 0;
       audit(actor, request, "call_square.test", model.isBlank() ? "custom-request" : model, Maps.of(
         "ok", false,
-        "status", 0,
+        "status", upstreamStatus,
         "latencyMs", latencyMs,
         "url", safeEndpointForAudit(baseUrl),
         "model", model,
@@ -431,7 +439,7 @@ public class AdminService {
       ));
       return Maps.of(
         "ok", false,
-        "status", 0,
+        "status", upstreamStatus,
         "latencyMs", latencyMs,
         "url", requestUrl,
         "model", model,
@@ -440,6 +448,7 @@ public class AdminService {
         "quality", quality,
         "requestBody", upstreamBody,
         "image", null,
+        "errorCode", errorCode,
         "error", message,
         "rawPreview", ""
       );
@@ -470,6 +479,9 @@ public class AdminService {
     if (url.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     url = outboundUrlPolicy.requirePublicHttpUrlString(url);
     if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");
+    if (!apiKey.isBlank() && isMaskedSecret(apiKey) && savedCallSquareApiKey() == null) {
+      throw AppException.badRequest("VALIDATION_FAILED", "当前 API Key 是掩码值，请填写完整真实 Key 后再保存");
+    }
     Map<String, Object> parsedBody = callSquareRequestBody(body);
     String model = callSquareString(parsedBody, "model", body.getModel());
     String prompt = callSquareString(parsedBody, "prompt", body.getPrompt());
@@ -946,7 +958,7 @@ public class AdminService {
 
   private boolean isMaskedSecret(String value) {
     if (value == null || value.isBlank()) return false;
-    return value.matches("^[*•]+$") || value.contains("****");
+    return value.matches("^[*•]+$") || value.contains("****") || value.contains("••••");
   }
 
   private String normalizePath(String incoming, String current, String fallback) {

@@ -183,14 +183,35 @@ function escapeHtml(value) {
   })[char]);
 }
 
+class ApiError extends Error {
+  constructor(message, status, payload, responseText) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload || {};
+    this.responseText = responseText || "";
+  }
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || payload.error || "请求失败");
+  const responseText = await response.text().catch(() => "");
+  let payload = {};
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      payload = {};
+    }
+  }
+  if (!response.ok) {
+    const message = payload.message || payload.error || response.statusText || `HTTP ${response.status}`;
+    throw new ApiError(message, response.status, payload, responseText);
+  }
   return payload;
 }
 
@@ -1803,6 +1824,11 @@ function validateGatewayPayload(payload) {
   }
 }
 
+function isMaskedApiKey(value) {
+  const text = String(value || "").trim();
+  return text.includes("****") || text.includes("••••") || /^[*•]+$/.test(text);
+}
+
 function gatewayTestMessage(response) {
   if (response.ok) return `测试成功 · ${formatLatency(response.latencyMs)}`;
   return `测试失败${response.error ? `：${response.error}` : ""}`;
@@ -1900,6 +1926,8 @@ function renderCallSquareResult(result) {
     return;
   }
   const imageUrl = result.image?.url || "";
+  const localStatus = result.localStatus || result.apiStatus || "";
+  const errorText = [result.errorCode, result.error].filter(Boolean).join("：");
   target.className = `call-square-result ${result.ok ? "ok" : "error"}`;
   target.innerHTML = `
     <div class="call-square-result-head">
@@ -1913,13 +1941,14 @@ function renderCallSquareResult(result) {
       ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="调用广场生成结果" />` : `<span>没有图片返回</span>`}
     </div>
     <div class="call-square-kpis">
-      <div><span>HTTP</span><strong>${escapeHtml(result.status || 0)}</strong></div>
+      <div><span>上游 HTTP</span><strong>${escapeHtml(result.status || 0)}</strong></div>
       <div><span>耗时</span><strong>${escapeHtml(formatLatency(result.latencyMs))}</strong></div>
       <div><span>尺寸</span><strong>${escapeHtml(result.size || "-")}</strong></div>
     </div>
     <div class="call-square-detail">
-      <label>请求地址<input readonly value="${escapeHtml(result.url || "-")}" /></label>
-      ${result.error ? `<div class="call-square-error">${escapeHtml(result.error)}</div>` : ""}
+      ${localStatus ? `<label>本机接口<input readonly value="${escapeHtml(localStatus)}" /></label>` : ""}
+      <label>上游地址<input readonly value="${escapeHtml(result.url || "-")}" /></label>
+      ${errorText ? `<div class="call-square-error">${escapeHtml(errorText)}</div>` : ""}
       ${result.prompt ? `<div class="call-square-prompt-preview">${escapeHtml(result.prompt)}</div>` : ""}
       ${imageUrl ? `<button class="small" data-action="copy-call-square-image" data-url="${escapeHtml(imageUrl)}" type="button">复制图片地址</button>` : ""}
       ${result.requestBody ? `<details class="call-square-raw"><summary>请求参数</summary><pre>${escapeHtml(JSON.stringify(result.requestBody, null, 2))}</pre></details>` : ""}
@@ -2322,27 +2351,43 @@ $("callSquareForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const button = event.submitter;
+  let submittedData = null;
   try {
     await withBusy(button, "测试中", async () => {
-      const data = callSquareFormData();
-      validateGatewayPayload({ baseUrl: data.url, apiKey: data.apiKey });
-      parseCallSquareRequestBody(data.requestBody);
-      const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(data) });
+      submittedData = callSquareFormData();
+      validateGatewayPayload({ baseUrl: submittedData.url, apiKey: submittedData.apiKey });
+      parseCallSquareRequestBody(submittedData.requestBody);
+      if (isMaskedApiKey(submittedData.apiKey) && !state.callSquareConfig.apiKeyConfigured) {
+        throw new Error("当前 API Key 是掩码值，但后台没有已保存的真实 Key，请重新填写完整 sk-...");
+      }
+      const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(submittedData) });
       renderCallSquareResult(result);
       toast(result.ok ? "生成成功" : (result.error || "生成失败"), result.ok ? "success" : "error");
     });
   } catch (error) {
+    const payload = error.payload || {};
+    let requestBody = payload.requestBody || null;
+    if (!requestBody && submittedData?.requestBody) {
+      try {
+        requestBody = parseCallSquareRequestBody(submittedData.requestBody);
+      } catch {
+        requestBody = null;
+      }
+    }
     renderCallSquareResult({
       ok: false,
-      status: 0,
-      latencyMs: 0,
-      model: "",
-      prompt: "",
-      size: "",
+      status: payload.status || 0,
+      localStatus: error.status ? `HTTP ${error.status}` : "",
+      latencyMs: payload.latencyMs || 0,
+      model: payload.model || requestBody?.model || "",
+      prompt: payload.prompt || requestBody?.prompt || "",
+      size: payload.size || requestBody?.size || "",
       image: null,
-      error: error.message,
-      url: callSquareRequestUrl(form.elements.url?.value || ""),
-      rawPreview: "",
+      errorCode: payload.errorCode || payload.error || "",
+      error: payload.message || payload.error || error.message,
+      url: payload.url || callSquareRequestUrl(submittedData?.url || form.elements.url?.value || ""),
+      requestBody,
+      rawPreview: payload.rawPreview || error.responseText || "",
     });
     toast(error.message, "error");
   }
