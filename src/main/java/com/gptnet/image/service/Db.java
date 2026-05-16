@@ -13,6 +13,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,12 +56,15 @@ public class Db {
   }
 
   public List<Gateway> enabledGatewaysForModel(String model) {
-    return jdbc.query("""
+    List<Gateway> gateways = jdbc.query("""
       SELECT * FROM "Gateway"
       WHERE "enabled" = true
         AND "model" = :model
       ORDER BY "priority" DESC
       """, Map.of("model", model), gatewayMapper());
+    Collections.shuffle(gateways);
+    gateways.sort((left, right) -> Integer.compare(right.priority(), left.priority()));
+    return gateways;
   }
 
   public Optional<ImageTask> imageTaskById(String id) {
@@ -99,6 +103,14 @@ public class Db {
       WHERE "status" IN ('queued', 'processing')
       ORDER BY "createdAt" ASC
       """, Map.of(), imageTaskMapper());
+  }
+
+  public long pendingTaskCount() {
+    Long value = jdbc.queryForObject("""
+      SELECT count(*) FROM "ImageTask"
+      WHERE "status" IN ('queued', 'processing')
+      """, Map.of(), Long.class);
+    return value == null ? 0 : value;
   }
 
   public List<ImageResult> resultsForTask(String taskId) {

@@ -15,20 +15,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class UpstreamClient {
-  private static final int MAX_JSON_RESPONSE_BYTES = 8 * 1024 * 1024;
-
   private final OutboundUrlPolicy outboundUrlPolicy;
+  private final int maxJsonResponseBytes;
   private final HttpClient http = HttpClient.newBuilder()
     .followRedirects(HttpClient.Redirect.NEVER)
     .connectTimeout(Duration.ofSeconds(30))
     .build();
 
-  public UpstreamClient(OutboundUrlPolicy outboundUrlPolicy) {
+  public UpstreamClient(
+    OutboundUrlPolicy outboundUrlPolicy,
+    @Value("${UPSTREAM_MAX_JSON_RESPONSE_MB:96}") int maxJsonResponseMb
+  ) {
     this.outboundUrlPolicy = outboundUrlPolicy;
+    this.maxJsonResponseBytes = Math.toIntExact(Math.min(
+      Integer.MAX_VALUE,
+      Math.max(1L, maxJsonResponseMb) * 1024L * 1024L
+    ));
   }
 
   public UpstreamResponse json(String rawUrl, String method, Map<String, String> headers, Object body, int timeoutMs) {
@@ -45,9 +52,11 @@ public class UpstreamClient {
         builder.method(method == null ? "POST" : method, HttpRequest.BodyPublishers.ofByteArray(bytes));
       }
       HttpResponse<InputStream> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
-      return parse(response.statusCode(), limitedUtf8(response.body(), MAX_JSON_RESPONSE_BYTES));
+      return parse(response.statusCode(), limitedUtf8(response.body(), maxJsonResponseBytes));
     } catch (AppException exception) {
       throw new UpstreamException("INVALID_UPSTREAM_URL", exception.getMessage(), 0, false);
+    } catch (ResponseTooLargeException exception) {
+      throw UpstreamException.responseTooLarge(exception.getMessage()).withDebug(rawUrl, null);
     } catch (Exception exception) {
       throw UpstreamException.network(exception.getMessage());
     }
@@ -66,9 +75,11 @@ public class UpstreamClient {
         builder.POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(),
         HttpResponse.BodyHandlers.ofInputStream()
       );
-      return parse(response.statusCode(), limitedUtf8(response.body(), MAX_JSON_RESPONSE_BYTES));
+      return parse(response.statusCode(), limitedUtf8(response.body(), maxJsonResponseBytes));
     } catch (AppException exception) {
       throw new UpstreamException("INVALID_UPSTREAM_URL", exception.getMessage(), 0, false);
+    } catch (ResponseTooLargeException exception) {
+      throw UpstreamException.responseTooLarge(exception.getMessage()).withDebug(rawUrl, null);
     } catch (Exception exception) {
       throw UpstreamException.network(exception.getMessage());
     }
@@ -119,8 +130,14 @@ public class UpstreamClient {
   private String limitedUtf8(InputStream input, int maxBytes) throws IOException {
     try (input) {
       byte[] bytes = input.readNBytes(maxBytes + 1);
-      if (bytes.length > maxBytes) throw new IOException("Upstream response too large");
+      if (bytes.length > maxBytes) throw new ResponseTooLargeException("Upstream response too large");
       return new String(bytes, StandardCharsets.UTF_8);
+    }
+  }
+
+  private static class ResponseTooLargeException extends IOException {
+    ResponseTooLargeException(String message) {
+      super(message);
     }
   }
 

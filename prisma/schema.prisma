@@ -221,7 +221,6 @@ model ImageTask {
   results    ImageResult[]
   usage      UsageRecord?
 
-  @@unique([apiKeyId, requestId])
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([gatewayId])

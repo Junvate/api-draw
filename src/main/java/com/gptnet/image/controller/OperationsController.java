@@ -89,15 +89,21 @@ public class OperationsController {
   @ResponseBody
   public Map<String, Object> ready() {
     QueueService.QueueStats counts = queue.stats();
+    Map<String, Integer> recentErrors = recentTaskErrors();
     return Maps.of(
       "ok", true,
       "store", "postgresql",
       "redis", true,
+      "database", Maps.of(
+        "poolMax", integerEnv("DB_POOL_MAX_SIZE", 200),
+        "poolMinIdle", integerEnv("DB_POOL_MIN_IDLE", 20)
+      ),
       "gateway", Maps.of(
         "distributed", true,
         "concurrency", integerEnv("IMAGE_WORKER_CONCURRENCY", 200),
         "active", counts.active(),
-        "queued", counts.waiting() + counts.delayed()
+        "queued", counts.waiting() + counts.delayed(),
+        "recentErrors24h", recentErrors
       ),
       "queue", Maps.of(
         "mode", "redis",
@@ -141,6 +147,10 @@ public class OperationsController {
     List<String> errorLines = errors.entrySet().stream()
       .map(entry -> "image_task_errors_total{code=\"" + entry.getKey().replaceAll("[^A-Za-z0-9_:-]", "_") + "\"} " + entry.getValue())
       .toList();
+    Map<String, Integer> recentErrors = recentTaskErrors();
+    List<String> recentErrorLines = recentErrors.entrySet().stream()
+      .map(entry -> "image_task_errors_24h{code=\"" + entry.getKey().replaceAll("[^A-Za-z0-9_:-]", "_") + "\"} " + entry.getValue())
+      .toList();
     java.util.ArrayList<String> lines = new java.util.ArrayList<>(List.of(
       "# TYPE app_users_total gauge",
       "app_users_total " + users,
@@ -166,6 +176,7 @@ public class OperationsController {
       "image_queue_recovered_total " + counts.recovered()
     ));
     lines.addAll(errorLines);
+    lines.addAll(recentErrorLines);
     lines.addAll(List.of(
       "gateway_health_status{status=\"healthy\"} " + health.getOrDefault("healthy", 0),
       "gateway_health_status{status=\"degraded\"} " + health.getOrDefault("degraded", 0),
@@ -174,6 +185,20 @@ public class OperationsController {
       ""
     ));
     return String.join("\n", lines);
+  }
+
+  private Map<String, Integer> recentTaskErrors() {
+    Map<String, Integer> errors = new java.util.HashMap<>();
+    db.jdbc().query("""
+      SELECT COALESCE("errorCode", 'none') AS code, count(*) AS count
+      FROM "ImageTask"
+      WHERE "status" = 'failed'::"ImageTaskStatus"
+        AND "createdAt" >= now() - interval '24 hours'
+      GROUP BY COALESCE("errorCode", 'none')
+      """, Map.of(), rs -> {
+      errors.put(rs.getString("code"), rs.getInt("count"));
+    });
+    return errors;
   }
 
   @GetMapping("/api/openapi.json")

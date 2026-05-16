@@ -29,6 +29,12 @@ public class UpstreamException extends RuntimeException {
   public static UpstreamException fromHttp(int status, String message) {
     String text = message == null ? "" : message;
     String lower = text.toLowerCase();
+    if (lower.contains("没有可用token") || lower.contains("no available token") || lower.contains("no available tokens")) {
+      return new UpstreamException("UPSTREAM_CAPACITY", text, status, true);
+    }
+    if (lower.contains("bad_response_body") || lower.contains("unexpected end of json input") || lower.contains("unexpected end of json")) {
+      return new UpstreamException("UPSTREAM_BAD_RESPONSE", text, status, true);
+    }
     if (status == 401 || status == 403 || lower.contains("invalid token") || lower.contains("incorrect api key")) {
       return new UpstreamException("UPSTREAM_AUTH_FAILED", text, status, false);
     }
@@ -48,5 +54,10 @@ public class UpstreamException extends RuntimeException {
     String text = message == null || message.isBlank() ? "上游网络请求失败" : message;
     boolean timeout = text.toLowerCase().contains("timeout") || text.toLowerCase().contains("timed out");
     return new UpstreamException(timeout ? "UPSTREAM_TIMEOUT" : "UPSTREAM_NETWORK_ERROR", text, 0, true);
+  }
+
+  public static UpstreamException responseTooLarge(String message) {
+    String text = message == null || message.isBlank() ? "上游响应体超过本服务限制" : message;
+    return new UpstreamException("UPSTREAM_RESPONSE_TOO_LARGE", text, 0, false);
   }
 }

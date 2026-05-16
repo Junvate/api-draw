@@ -121,10 +121,14 @@ Useful controls:
 PORT=4173
 TRUST_PROXY=1
 REDIS_KEY_PREFIX=draw:
-DB_POOL_MAX_SIZE=50
+DB_POOL_MAX_SIZE=200
+DB_POOL_MIN_IDLE=20
+DB_POOL_CONNECTION_TIMEOUT_MS=30000
+POSTGRES_MAX_CONNECTIONS=300
 GATEWAY_QUEUE_LIMIT=5000
 GATEWAY_FAILURE_THRESHOLD=30
 GATEWAY_COOLDOWN_MS=300000
+UPSTREAM_MAX_JSON_RESPONSE_MB=96
 IMAGE_WORKER_CONCURRENCY=200
 IMAGE_JOB_ATTEMPTS=3
 IMAGE_JOB_BACKOFF_MS=5000
@@ -146,6 +150,8 @@ LOG_LEVEL=info
 ```
 
 Real image gateways are configured in `/admin`. Put the upstream Base URL, model, group, and the real `sk-...` API key in the gateway row. Runtime environment variables are not used as fallback gateway keys.
+
+For high worker concurrency, keep PostgreSQL `max_connections` above `DB_POOL_MAX_SIZE * app_instances` plus admin/maintenance headroom, or lower `DB_POOL_MAX_SIZE` to match the database.
 
 S3/R2/OSS-compatible result storage:
 

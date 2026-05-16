@@ -176,6 +176,7 @@ public class ImageService {
   }
 
   public ImageTask queueTask(ImageTask task) {
+    if (task == null || !"queued".equals(task.status())) return task;
     try {
       queue.enqueue(task.id());
       return task;
@@ -188,13 +189,21 @@ public class ImageService {
     }
   }
 
+  public ImageTask ensureQueued(ImageTask task) {
+    if (task == null || !"queued".equals(task.status())) return task;
+    try {
+      queue.enqueueExisting(task.id());
+    } catch (Exception exception) {
+      log.warn("[task={}] Unable to refresh queued task membership: {}", task.id(), exception.getMessage());
+    }
+    return task;
+  }
+
   public ImageTask processTask(String taskId, int attempt, int maxAttempts) {
     ImageTask task = db.imageTaskById(taskId).map(db::hydrateTask).orElse(null);
     if (task == null || !"queued".equals(task.status())) return task;
-    Gateway gateway = task.gateway();
-    if (gateway == null || !gateway.enabled() || isCooling(gateway)) {
-      return failTask(task, "GATEWAY_UNAVAILABLE", "任务网关当前不可用", true);
-    }
+    Gateway gateway = activeGatewayForTask(task).orElse(null);
+    if (gateway == null) return failTask(task, "GATEWAY_UNAVAILABLE", "任务网关当前不可用", true);
 
     long started = System.currentTimeMillis();
     int claimed = db.jdbc().update("""
@@ -211,13 +220,89 @@ public class ImageService {
       int unitCost = task.imageCount() > 0 ? task.costCredits() / task.imageCount() : task.costCredits();
       int refundAmount = shortfall > 0 ? unitCost * shortfall : 0;
       int finalCost = task.costCredits() - refundAmount;
+      return completeTaskSuccess(task, gateway, run, latencyMs, returnedCount, refundAmount, finalCost);
+    } catch (Exception exception) {
+      StorageService.StorageException storageException = storageException(exception);
+      if (storageException != null) {
+        String message = storageException.getMessage() == null ? "结果存储失败" : storageException.getMessage();
+        log.error("[task={}] Storage error: {}", task.id(), message, exception);
+        return failTask(task, "STORAGE_FAILED", message, true);
+      }
+      UpstreamException upstreamException = upstreamException(exception);
+      String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
+      String code = upstreamException == null ? "UPSTREAM_FAILED" : upstreamException.code();
+      boolean retryable = upstreamException == null || upstreamException.retryable();
+      String reqUrl = upstreamException != null ? upstreamException.requestUrl() : null;
+      String rawResp = upstreamException != null ? upstreamException.rawResponse() : null;
+      log.error("[task={}] Gateway error gateway={} code={} attempt={}/{} retryable={} message={}",
+        task.id(), gateway.name(), code, attempt, maxAttempts, retryable, message, exception);
+      if (countsAgainstGatewayHealth(upstreamException)) {
+        recordGatewayFailure(gateway, message, System.currentTimeMillis() - started, code);
+      }
+      if (reqUrl != null || rawResp != null) {
+        db.jdbc().update("""
+          UPDATE "ImageTask" SET "requestUrl" = :requestUrl, "rawResponse" = :rawResponse
+          WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
+          """, new MapSqlParameterSource()
+          .addValue("id", task.id())
+          .addValue("requestUrl", reqUrl == null ? "" : reqUrl)
+          .addValue("rawResponse", truncate(rawResp, 4000)));
+      }
+      if (retryable && attempt < maxAttempts) {
+        int requeued = db.jdbc().update("""
+          UPDATE "ImageTask" SET
+            "status" = 'queued'::"ImageTaskStatus",
+            "retryCount" = :retryCount,
+            "errorCode" = :code,
+            "errorMessage" = :message,
+            "updatedAt" = now()
+          WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
+          """, new MapSqlParameterSource()
+          .addValue("id", task.id())
+          .addValue("retryCount", attempt)
+          .addValue("code", code)
+          .addValue("message", truncate(message, 1000)));
+        if (requeued == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
+        return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
+      }
+      return failTask(task, code, message, true);
+    }
+  }
+
+  public ImageTask failTask(ImageTask task, String code, String message, boolean refund) {
+    return transactions.execute(status -> failTaskInTransaction(task, code, message, refund));
+  }
+
+  private ImageTask completeTaskSuccess(ImageTask task, Gateway gateway, GenerationRun run, int latencyMs, int returnedCount, int refundAmount, int finalCost) {
+    return transactions.execute(status -> {
+      int updated = db.jdbc().update("""
+        UPDATE "ImageTask" SET
+          "status" = 'success'::"ImageTaskStatus",
+          "latencyMs" = :latencyMs,
+          "costCredits" = :costCredits,
+          "errorCode" = :code,
+          "errorMessage" = :message,
+          "finishedAt" = now(),
+          "updatedAt" = now()
+        WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
+        """, new MapSqlParameterSource()
+        .addValue("id", task.id())
+        .addValue("latencyMs", latencyMs)
+        .addValue("costCredits", finalCost)
+        .addValue("code", run.lastError() == null ? null : run.lastError().code())
+        .addValue("message", run.lastError() == null ? null : truncate(run.lastError().getMessage(), 1000)));
+      if (updated == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
       if (refundAmount > 0) refundTaskCredits(task, refundAmount);
       db.jdbc().update("""
         INSERT INTO "UsageRecord" (
           "id", "userId", "apiKeyId", "taskId", "model", "imageCount", "costCredits", "latencyMs", "status"
         )
         VALUES (:id, :userId, :apiKeyId, :taskId, :model, :imageCount, :costCredits, :latencyMs, 'success')
-        ON CONFLICT ("taskId") DO UPDATE SET "status" = 'success', "costCredits" = EXCLUDED."costCredits", "latencyMs" = EXCLUDED."latencyMs"
+        ON CONFLICT ("taskId") DO UPDATE SET
+          "status" = 'success',
+          "imageCount" = EXCLUDED."imageCount",
+          "costCredits" = EXCLUDED."costCredits",
+          "latencyMs" = EXCLUDED."latencyMs"
         """, new MapSqlParameterSource()
         .addValue("id", db.id())
         .addValue("userId", task.userId())
@@ -239,81 +324,27 @@ public class ImageService {
           "updatedAt" = now()
         WHERE "id" = :id
         """, Map.of("id", gateway.id(), "latencyMs", latencyMs));
-      db.jdbc().update("""
-        UPDATE "ImageTask" SET
-          "status" = 'success'::"ImageTaskStatus",
-          "latencyMs" = :latencyMs,
-          "costCredits" = :costCredits,
-          "errorCode" = :code,
-          "errorMessage" = :message,
-          "finishedAt" = now(),
-          "updatedAt" = now()
-        WHERE "id" = :id
-        """, new MapSqlParameterSource()
-        .addValue("id", task.id())
-        .addValue("latencyMs", latencyMs)
-        .addValue("costCredits", finalCost)
-        .addValue("code", run.lastError() == null ? null : run.lastError().code())
-        .addValue("message", run.lastError() == null ? null : truncate(run.lastError().getMessage(), 1000)));
       return db.imageTaskById(task.id()).map(db::hydrateTask).orElseThrow();
-    } catch (Exception exception) {
-      StorageService.StorageException storageException = storageException(exception);
-      if (storageException != null) {
-        String message = storageException.getMessage() == null ? "结果存储失败" : storageException.getMessage();
-        log.error("[task={}] Storage error: {}", task.id(), message, exception);
-        return failTask(task, "STORAGE_FAILED", message, true);
-      }
-      UpstreamException upstreamException = upstreamException(exception);
-      String message = exception.getMessage() == null ? String.valueOf(exception) : exception.getMessage();
-      String code = upstreamException == null ? "UPSTREAM_FAILED" : upstreamException.code();
-      boolean retryable = upstreamException == null || upstreamException.retryable();
-      String reqUrl = upstreamException != null ? upstreamException.requestUrl() : null;
-      String rawResp = upstreamException != null ? upstreamException.rawResponse() : null;
-      log.error("[task={}] Gateway error gateway={} code={} attempt={}/{} retryable={} message={}",
-        task.id(), gateway.name(), code, attempt, maxAttempts, retryable, message, exception);
-      recordGatewayFailure(gateway, message, System.currentTimeMillis() - started, code);
-      if (reqUrl != null || rawResp != null) {
-        db.jdbc().update("""
-          UPDATE "ImageTask" SET "requestUrl" = :requestUrl, "rawResponse" = :rawResponse WHERE "id" = :id
-          """, Map.of("id", task.id(), "requestUrl", reqUrl == null ? "" : reqUrl, "rawResponse", truncate(rawResp, 4000)));
-      }
-      if (retryable && attempt < maxAttempts) {
-        db.jdbc().update("""
-          UPDATE "ImageTask" SET
-            "status" = 'queued'::"ImageTaskStatus",
-            "retryCount" = :retryCount,
-            "errorCode" = :code,
-            "errorMessage" = :message,
-            "updatedAt" = now()
-          WHERE "id" = :id
-          """, new MapSqlParameterSource()
-          .addValue("id", task.id())
-          .addValue("retryCount", attempt)
-          .addValue("code", code)
-          .addValue("message", truncate(message, 1000)));
-        return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
-      }
-      return failTask(task, code, message, true);
-    }
+    });
   }
 
-  @Transactional
-  public ImageTask failTask(ImageTask task, String code, String message, boolean refund) {
-    auth.lockUserWallet(task.userId());
-    Integer refundCount = db.jdbc().queryForObject("""
-      SELECT count(*) FROM "WalletEntry" WHERE "refId" = :refId AND "reason" = 'generation_refund'::"WalletEntryReason"
-      """, Map.of("refId", task.id()), Integer.class);
-    if (refund && (refundCount == null || refundCount == 0)) {
-      db.jdbc().update("""
-        INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
-        VALUES (:id, :userId, :amount, 'generation_refund'::"WalletEntryReason", :refId, :actorId)
-        """, new MapSqlParameterSource()
-        .addValue("id", db.id())
-        .addValue("userId", task.userId())
-        .addValue("amount", task.costCredits())
-        .addValue("refId", task.id())
-        .addValue("actorId", task.userId()));
-    }
+  private ImageTask failTaskInTransaction(ImageTask task, String code, String message, boolean refund) {
+    int updated = db.jdbc().update("""
+      UPDATE "ImageTask" SET
+        "status" = 'failed'::"ImageTaskStatus",
+        "errorCode" = :code,
+        "errorMessage" = :message,
+        "finishedAt" = now(),
+        "updatedAt" = now()
+      WHERE "id" = :id
+        AND "status" NOT IN ('success'::"ImageTaskStatus", 'failed'::"ImageTaskStatus", 'blocked'::"ImageTaskStatus", 'cancelled'::"ImageTaskStatus")
+      """, new MapSqlParameterSource()
+      .addValue("id", task.id())
+      .addValue("code", code)
+      .addValue("message", truncate(message, 1000)));
+    if (updated == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
+    deleteTaskResults(task.id());
+    if (refund) refundTaskCredits(task, heldCredits(task));
     db.jdbc().update("""
       INSERT INTO "UsageRecord" (
         "id", "userId", "apiKeyId", "taskId", "model", "imageCount", "costCredits", "status"
@@ -327,19 +358,22 @@ public class ImageService {
       .addValue("taskId", task.id())
       .addValue("model", task.model())
       .addValue("imageCount", task.imageCount()));
-    db.jdbc().update("""
-      UPDATE "ImageTask" SET
-        "status" = 'failed'::"ImageTaskStatus",
-        "errorCode" = :code,
-        "errorMessage" = :message,
-        "finishedAt" = now(),
-        "updatedAt" = now()
-      WHERE "id" = :id
-      """, new MapSqlParameterSource()
-      .addValue("id", task.id())
-      .addValue("code", code)
-      .addValue("message", truncate(message, 1000)));
     return db.imageTaskById(task.id()).map(db::hydrateTask).orElseThrow();
+  }
+
+  private int heldCredits(ImageTask task) {
+    Integer value = db.jdbc().queryForObject("""
+      SELECT COALESCE(SUM(-"amount"), 0)
+      FROM "WalletEntry"
+      WHERE "refId" = :refId
+        AND "reason" = 'generation_hold'::"WalletEntryReason"
+      """, Map.of("refId", task.id()), Integer.class);
+    int held = value == null ? 0 : value;
+    return held > 0 ? held : Math.max(0, task.costCredits());
+  }
+
+  private void deleteTaskResults(String taskId) {
+    db.jdbc().update("DELETE FROM \"ImageResult\" WHERE \"taskId\" = :taskId", Map.of("taskId", taskId));
   }
 
   private void refundTaskCredits(ImageTask task, int amount) {
@@ -348,7 +382,8 @@ public class ImageService {
     db.jdbc().update("""
       INSERT INTO "WalletEntry" ("id", "userId", "amount", "reason", "refId", "actorId")
       VALUES (:id, :userId, :amount, 'generation_refund'::"WalletEntryReason", :refId, :actorId)
-      ON CONFLICT DO NOTHING
+      ON CONFLICT ("refId") WHERE "reason" = 'generation_refund'::"WalletEntryReason"
+      DO UPDATE SET "amount" = GREATEST("WalletEntry"."amount", EXCLUDED."amount")
       """, new MapSqlParameterSource()
       .addValue("id", db.id())
       .addValue("userId", task.userId())
@@ -414,11 +449,29 @@ public class ImageService {
     String preferredGroup = groupForSize(size);
     List<Gateway> all = db.enabledGatewaysForModel(model).stream()
       .filter(item -> resolveGatewayApiKey(item, false) != null)
+      .filter(item -> !isCooling(item))
       .toList();
     // Try preferred group first, then fall back to any available group
     return all.stream().filter(item -> groupMatches(item.upstreamGroup(), preferredGroup)).findFirst()
       .or(() -> all.stream().findFirst())
       .orElseThrow(() -> AppException.unavailable("NO_AVAILABLE_GATEWAY", "没有可用渠道，请稍后重试"));
+  }
+
+  private Optional<Gateway> activeGatewayForTask(ImageTask task) {
+    Gateway current = task.gateway();
+    if (current != null && current.enabled() && !isCooling(current) && resolveGatewayApiKey(current, false) != null) {
+      return Optional.of(current);
+    }
+    try {
+      Gateway replacement = selectGateway(task.model(), task.size());
+      db.jdbc().update("""
+        UPDATE "ImageTask" SET "gatewayId" = :gatewayId, "updatedAt" = now()
+        WHERE "id" = :id AND "status" = 'queued'::"ImageTaskStatus"
+        """, Map.of("id", task.id(), "gatewayId", replacement.id()));
+      return Optional.of(replacement);
+    } catch (RuntimeException exception) {
+      return Optional.empty();
+    }
   }
 
   public String resolveGatewayApiKey(Gateway gateway) {
@@ -474,7 +527,8 @@ public class ImageService {
         : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, index);
       persistGatewayResult(task, result);
       db.jdbc().update("""
-        UPDATE "ImageTask" SET "updatedAt" = now() WHERE "id" = :id
+        UPDATE "ImageTask" SET "updatedAt" = now()
+        WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
         """, Map.of("id", task.id()));
       return new ImageAttempt(index, result, null);
     } catch (Exception exception) {
@@ -490,7 +544,11 @@ public class ImageService {
   private void persistGatewayResult(ImageTask task, GatewayResult result) {
     db.jdbc().update("""
       INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "width", "height", "storageKey", "sizeBytes", "hash")
-      VALUES (:id, :taskId, :url, :format, :width, :height, :storageKey, :sizeBytes, :hash)
+      SELECT :id, :taskId, :url, :format, :width, :height, :storageKey, :sizeBytes, :hash
+      WHERE EXISTS (
+        SELECT 1 FROM "ImageTask"
+        WHERE "id" = :taskId AND "status" = 'processing'::"ImageTaskStatus"
+      )
       ON CONFLICT ("taskId", "url") DO UPDATE SET
         "format" = EXCLUDED."format",
         "width" = EXCLUDED."width",
@@ -511,7 +569,11 @@ public class ImageService {
     for (ExtraImage extra : result.extras()) {
       db.jdbc().update("""
         INSERT INTO "ImageResult" ("id", "taskId", "url", "format", "storageKey", "sizeBytes", "hash")
-        VALUES (:id, :taskId, :url, :format, :storageKey, :sizeBytes, :hash)
+        SELECT :id, :taskId, :url, :format, :storageKey, :sizeBytes, :hash
+        WHERE EXISTS (
+          SELECT 1 FROM "ImageTask"
+          WHERE "id" = :taskId AND "status" = 'processing'::"ImageTaskStatus"
+        )
         ON CONFLICT ("taskId", "url") DO UPDATE SET
           "storageKey" = EXCLUDED."storageKey",
           "sizeBytes" = EXCLUDED."sizeBytes",
@@ -536,6 +598,10 @@ public class ImageService {
     if (upstreamGroup != null) body.put("group", upstreamGroup);
     UpstreamClient.UpstreamResponse response = upstream.json(url, "POST",
       Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
+    if (!response.ok() && body.containsKey("response_format") && isUnsupportedResponseFormat(response)) {
+      body.remove("response_format");
+      response = upstream.json(url, "POST", Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
+    }
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(url, response.text());
     List<Map<String, Object>> dataList = allData(response.payload());
     if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
@@ -561,16 +627,19 @@ public class ImageService {
 
   private Map<String, Object> imageGenerationRequestBody(String url, ImageTask task, int n) {
     String format = "jpg".equals(task.outputFormat()) ? "jpeg" : task.outputFormat();
+    boolean requestUrlResponse = shouldRequestUrlResponse(url, task.model());
     if (isSuperApiImageGenerationUrl(url)) {
-      return Maps.of(
+      Map<String, Object> body = Maps.of(
         "model", task.model(),
         "prompt", task.prompt(),
         "size", task.size(),
         "quality", task.quality(),
         "format", format
       );
+      if (requestUrlResponse) body.put("response_format", "url");
+      return body;
     }
-    return Maps.of(
+    Map<String, Object> body = Maps.of(
       "model", task.model(),
       "prompt", task.prompt(),
       "size", task.size(),
@@ -579,11 +648,31 @@ public class ImageService {
       "background", task.background(),
       "n", n
     );
+    if (requestUrlResponse) body.put("response_format", "url");
+    return body;
   }
 
   private boolean isSuperApiImageGenerationUrl(String url) {
     String normalized = Optional.ofNullable(url).orElse("").toLowerCase();
     return normalized.contains("api.superapi.me") && normalized.contains("/images/generations");
+  }
+
+  private boolean shouldRequestUrlResponse(String url, String model) {
+    String normalizedModel = Optional.ofNullable(model).orElse("").toLowerCase();
+    if (normalizedModel.startsWith("dall-e-")) return true;
+    String normalizedUrl = Optional.ofNullable(url).orElse("").toLowerCase();
+    if (normalizedUrl.contains("api.openai.com")) return false;
+    if (normalizedModel.equals("gpt-image-1") || normalizedModel.startsWith("gpt-image-1.")) return false;
+    return true;
+  }
+
+  private boolean isUnsupportedResponseFormat(UpstreamClient.UpstreamResponse response) {
+    String message = upstream.errorMessage(response.payload(), response.text()).toLowerCase();
+    return response.status() == 400 && message.contains("response_format");
+  }
+
+  private boolean hasPart(List<Part> parts, String name) {
+    return parts.stream().anyMatch(part -> name.equals(part.name()));
   }
 
   private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n, int variantIndex) {
@@ -599,8 +688,13 @@ public class ImageService {
       parts.add(Part.file("image", image.bytes(), image.filename(), image.contentType()));
     }
     String editUrl = upstreamUrl(gateway.baseUrl(), editPath);
+    if (shouldRequestUrlResponse(editUrl, task.model())) parts.add(Part.text("response_format", "url"));
     UpstreamClient.UpstreamResponse response = upstream.multipart(editUrl,
       Map.of("Authorization", "Bearer " + apiKey), parts, gateway.timeoutMs());
+    if (!response.ok() && hasPart(parts, "response_format") && isUnsupportedResponseFormat(response)) {
+      parts.removeIf(part -> "response_format".equals(part.name()));
+      response = upstream.multipart(editUrl, Map.of("Authorization", "Bearer " + apiKey), parts, gateway.timeoutMs());
+    }
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(editUrl, response.text());
     List<Map<String, Object>> dataList = allData(response.payload());
     if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
@@ -722,12 +816,17 @@ public class ImageService {
   }
 
   private void recordGatewayFailure(Gateway gateway, String message, long latencyMs, String code) {
-    int failures = gateway.consecutiveFailures() + 1;
     db.jdbc().update("""
       UPDATE "Gateway" SET
-        "healthStatus" = CAST(:healthStatus AS "GatewayHealth"),
-        "consecutiveFailures" = :failures,
-        "disabledUntil" = :disabledUntil,
+        "consecutiveFailures" = "consecutiveFailures" + 1,
+        "healthStatus" = CASE
+          WHEN "consecutiveFailures" + 1 >= :threshold THEN 'down'::"GatewayHealth"
+          ELSE 'degraded'::"GatewayHealth"
+        END,
+        "disabledUntil" = CASE
+          WHEN "consecutiveFailures" + 1 >= :threshold THEN :disabledUntil
+          ELSE NULL
+        END,
         "lastCheckedAt" = now(),
         "lastFailureAt" = now(),
         "lastLatencyMs" = :latencyMs,
@@ -736,11 +835,18 @@ public class ImageService {
       WHERE "id" = :id
       """, new MapSqlParameterSource()
       .addValue("id", gateway.id())
-      .addValue("healthStatus", failures >= failureThreshold ? "down" : "degraded")
-      .addValue("failures", failures)
-      .addValue("disabledUntil", failures >= failureThreshold ? java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)) : null)
+      .addValue("threshold", failureThreshold)
+      .addValue("disabledUntil", java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)))
       .addValue("latencyMs", Math.min(Integer.MAX_VALUE, latencyMs))
       .addValue("message", truncate(message, 1000)));
+  }
+
+  private boolean countsAgainstGatewayHealth(UpstreamException exception) {
+    if (exception == null) return true;
+    return switch (exception.code()) {
+      case "UPSTREAM_RESPONSE_TOO_LARGE", "UPSTREAM_EMPTY_RESULT", "INVALID_UPSTREAM_URL" -> false;
+      default -> true;
+    };
   }
 
   private boolean groupMatches(String gatewayGroup, String preferredGroup) {

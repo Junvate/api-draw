@@ -127,7 +127,8 @@ public class PublicApiController {
     if (requestId != null) {
       var existing = db.imageTaskByApiKeyAndRequest(context.apiKey().id(), requestId).map(db::hydrateTask);
       if (existing.isPresent()) {
-        return Maps.of("object", "image_generation.response", "data", imageService.publicTask(existing.get(), context.user().id()));
+        ImageTask task = imageService.ensureQueued(existing.get());
+        return Maps.of("object", "image_generation.response", "data", imageService.publicTask(task, context.user().id()));
       }
     }
     ImageTask task = imageService.createTask(new ImageService.CreateTaskParams(context.user().id(), context.apiKey().id(), requestId, body, files));

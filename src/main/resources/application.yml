@@ -22,7 +22,9 @@ spring:
     baseline-on-migrate: true
   datasource:
     hikari:
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:50}
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:200}
+      minimum-idle: ${DB_POOL_MIN_IDLE:20}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
   web:
     resources:
       static-locations:
