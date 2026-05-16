@@ -10,6 +10,7 @@ import com.gptnet.image.support.Maps;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -20,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
@@ -816,29 +818,35 @@ public class ImageService {
   }
 
   private void recordGatewayFailure(Gateway gateway, String message, long latencyMs, String code) {
-    db.jdbc().update("""
-      UPDATE "Gateway" SET
-        "consecutiveFailures" = "consecutiveFailures" + 1,
-        "healthStatus" = CASE
-          WHEN "consecutiveFailures" + 1 >= :threshold THEN 'down'::"GatewayHealth"
-          ELSE 'degraded'::"GatewayHealth"
-        END,
-        "disabledUntil" = CASE
-          WHEN "consecutiveFailures" + 1 >= :threshold THEN :disabledUntil
-          ELSE NULL
-        END,
-        "lastCheckedAt" = now(),
-        "lastFailureAt" = now(),
-        "lastLatencyMs" = :latencyMs,
-        "lastError" = :message,
-        "updatedAt" = now()
-      WHERE "id" = :id
-      """, new MapSqlParameterSource()
-      .addValue("id", gateway.id())
-      .addValue("threshold", failureThreshold)
-      .addValue("disabledUntil", java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)))
-      .addValue("latencyMs", Math.min(Integer.MAX_VALUE, latencyMs))
-      .addValue("message", truncate(message, 1000)));
+    int safeLatencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, Math.max(0L, latencyMs)));
+    try {
+      db.jdbc().update("""
+        UPDATE "Gateway" SET
+          "consecutiveFailures" = "consecutiveFailures" + 1,
+          "healthStatus" = CASE
+            WHEN "consecutiveFailures" + 1 >= :threshold THEN 'down'::"GatewayHealth"
+            ELSE 'degraded'::"GatewayHealth"
+          END,
+          "disabledUntil" = CASE
+            WHEN "consecutiveFailures" + 1 >= :threshold THEN CAST(:disabledUntil AS timestamp)
+            ELSE NULL
+          END,
+          "lastCheckedAt" = now(),
+          "lastFailureAt" = now(),
+          "lastLatencyMs" = :latencyMs,
+          "lastError" = :message,
+          "updatedAt" = now()
+        WHERE "id" = :id
+        """, new MapSqlParameterSource()
+        .addValue("id", gateway.id())
+        .addValue("threshold", failureThreshold)
+        .addValue("disabledUntil", java.sql.Timestamp.from(Instant.now().plusMillis(cooldownMs)), Types.TIMESTAMP)
+        .addValue("latencyMs", safeLatencyMs, Types.INTEGER)
+        .addValue("message", truncate(message, 1000)));
+    } catch (DataAccessException exception) {
+      log.warn("[gateway={}] Unable to record gateway failure code={} latencyMs={}: {}",
+        gateway.id(), code, safeLatencyMs, exception.getMessage());
+    }
   }
 
   private boolean countsAgainstGatewayHealth(UpstreamException exception) {
