@@ -40,6 +40,7 @@ public class AdminService {
   private static final int MAX_REDEMPTION_BATCH_SIZE = 500;
   private static final int MAX_CALL_SQUARE_REFERENCE_IMAGES = 16;
   private static final long MAX_CALL_SQUARE_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
+  private static final int MAX_CALL_SQUARE_TIMEOUT_MS = 20 * 60 * 1000;
   private static final String DEFAULT_CALL_SQUARE_URL = "https://api.superapi.me/v1/images/generations";
   private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
@@ -417,7 +418,7 @@ public class AdminService {
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String requestUrl = baseUrl;
     String upstreamGroup = blankToNull(body.getUpstreamGroup());
-    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
+    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), MAX_CALL_SQUARE_TIMEOUT_MS);
     if (baseUrl.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     requestUrl = outboundUrlPolicy.requirePublicHttpUrlString(baseUrl);
     boolean maskedApiKey = isMaskedSecret(apiKey);
@@ -545,7 +546,7 @@ public class AdminService {
     String url = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String upstreamGroup = Optional.ofNullable(body.getUpstreamGroup()).orElse("").trim();
-    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), 600000);
+    int timeoutMs = Math.min(Math.max(body.getTimeoutMs() == null ? 90000 : body.getTimeoutMs(), 1000), MAX_CALL_SQUARE_TIMEOUT_MS);
     if (url.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "URL 不能为空");
     url = outboundUrlPolicy.requirePublicHttpUrlString(url);
     if (!apiKey.isBlank() && apiKey.matches("(?i)^https?://.*")) throw AppException.badRequest("INVALID_CALL_SQUARE_API_KEY", "API Key 不能填写 URL");

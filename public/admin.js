@@ -23,6 +23,7 @@ const DEFAULT_CALL_SQUARE_CONFIG = {
 
 const AUTO_REFRESH_MS = 30000;
 const DEFAULT_USER_WARNING_MESSAGE = "系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。";
+const MAX_CALL_SQUARE_TIMEOUT_MS = 1200000;
 
 const state = {
   user: null,
@@ -1913,6 +1914,27 @@ function gatewayTestMessage(response) {
   return `测试失败${response.error ? `：${response.error}` : ""}`;
 }
 
+function callSquareDiagnosis(result) {
+  if (!result || result.ok) return "";
+  const localStatus = String(result.localStatus || result.apiStatus || "");
+  const upstreamStatus = Number(result.status || 0);
+  const errorCode = String(result.errorCode || "");
+  const rawPreview = String(result.rawPreview || "");
+  if (localStatus.includes("504") && !upstreamStatus) {
+    return "本机接口先返回 504，后端没有等到上游结果。通常是站点入口 Nginx / 网关的 proxy_read_timeout、send_timeout 或平台请求时限短于这里填写的超时。需要把入口代理超时调大到高于本页超时，或降低图片数量/尺寸后重试。";
+  }
+  if (upstreamStatus === 504 || rawPreview.toLowerCase().includes("504 gateway time-out")) {
+    return "远端上游返回 504。请求已经发到你填写的上游地址，但上游自己的 Nginx / 网关在模型完成前超时，需上游侧提高超时或排查模型服务耗时。";
+  }
+  if (errorCode === "UPSTREAM_TIMEOUT") {
+    return "本服务等待上游超过本页设置的超时限制。可以适当增大超时，但如果入口代理超时更短，仍会先看到本机接口 504。";
+  }
+  if (result.mode === "edit" && Number(result.referenceCount || 0) > 0) {
+    return "参考图会走 images/edits 的 multipart 请求，上传和编辑通常比纯文本生成更慢；多图、高清和复杂提示词都会增加超时概率。";
+  }
+  return "";
+}
+
 function callSquareRequestUrl(rawUrl) {
   return String(rawUrl || "").trim();
 }
@@ -1957,12 +1979,13 @@ function callSquareFormData() {
   const form = $("callSquareForm");
   const data = formData(form);
   const requestBody = prettyCallSquareRequestBody(data.requestBody || DEFAULT_CALL_SQUARE_CONFIG.requestBody);
+  const timeoutMs = Math.min(Math.max(Number(data.timeoutMs || 90000), 1000), MAX_CALL_SQUARE_TIMEOUT_MS);
   return {
     url: callSquareRequestUrl(data.url),
     apiKey: String(data.apiKey || "").trim(),
     upstreamGroup: String(data.upstreamGroup || "").trim(),
     requestBody,
-    timeoutMs: Number(data.timeoutMs || 90000),
+    timeoutMs,
   };
 }
 
@@ -2091,6 +2114,7 @@ function renderCallSquareResult(result) {
   const localStatus = result.localStatus || result.apiStatus || "";
   const errorText = [result.errorCode, result.error].filter(Boolean).join("：");
   const modeText = result.mode === "edit" ? `参考图编辑 · ${Number(result.referenceCount || 0)} 张` : "文本生成";
+  const diagnosis = callSquareDiagnosis(result);
   target.className = `call-square-result ${result.ok ? "ok" : "error"}`;
   target.innerHTML = `
     <div class="call-square-result-head">
@@ -2113,6 +2137,7 @@ function renderCallSquareResult(result) {
       ${localStatus ? `<label>本机接口<input readonly value="${escapeHtml(localStatus)}" /></label>` : ""}
       <label>上游地址<input readonly value="${escapeHtml(result.url || "-")}" /></label>
       ${errorText ? `<div class="call-square-error">${escapeHtml(errorText)}</div>` : ""}
+      ${diagnosis ? `<div class="call-square-diagnosis"><strong>诊断</strong><span>${escapeHtml(diagnosis)}</span></div>` : ""}
       ${result.prompt ? `<div class="call-square-prompt-preview">${escapeHtml(result.prompt)}</div>` : ""}
       ${imageUrl ? `<button class="small" data-action="copy-call-square-image" data-url="${escapeHtml(imageUrl)}" type="button">复制图片地址</button>` : ""}
       ${result.requestBody ? `<details class="call-square-raw"><summary>请求参数</summary><pre>${escapeHtml(JSON.stringify(result.requestBody, null, 2))}</pre></details>` : ""}

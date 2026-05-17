@@ -96,7 +96,7 @@ public final class AdminDtos {
     @Size(max = 100000)
     private String requestBody;
     @Min(1000)
-    @Max(600000)
+    @Max(1200000)
     private Integer timeoutMs;
 
     public String getUrl() { return url; }
