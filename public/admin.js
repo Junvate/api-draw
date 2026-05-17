@@ -22,6 +22,7 @@ const DEFAULT_CALL_SQUARE_CONFIG = {
 };
 
 const AUTO_REFRESH_MS = 30000;
+const DEFAULT_USER_WARNING_MESSAGE = "系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。";
 
 const state = {
   user: null,
@@ -1210,12 +1211,17 @@ function filteredUsers() {
 function renderUserStats() {
   const userCount = state.users.length;
   const totalCredits = state.users.reduce((sum, user) => sum + Number(user.credits || 0), 0);
+  const pendingWarnings = state.users.reduce((sum, user) => sum + userWarnings(user).length, 0);
   $("userStats").innerHTML = [
     statCard("用户数", userCount, "当前账号总数"),
     statCard("低余额用户", state.users.filter((user) => Number(user.credits || 0) < 20).length, "需要补充积分"),
     statCard("积分余额", totalCredits, "所有用户合计"),
-    statCard("平均积分", userCount ? Math.round(totalCredits / userCount) : 0, "按用户均值估算"),
+    statCard("待确认警告", pendingWarnings, "用户未关闭的风险提示"),
   ].join("");
+}
+
+function userWarnings(user) {
+  return Array.isArray(user?.warnings) ? user.warnings : [];
 }
 
 function renderUsers() {
@@ -1224,13 +1230,14 @@ function renderUsers() {
 
   $("userRows").innerHTML = rows.map((user) => {
     const draftState = getRowDraftState("users", user.id);
+    const warningCount = userWarnings(user).length;
     return `
     <tr data-id="${user.id}" class="${draftState.anyDirty ? "is-dirty" : ""}">
       <td class="select-col"><input type="checkbox" data-select="user" ${state.selected.users.has(user.id) ? "checked" : ""} aria-label="选择 ${escapeHtml(user.email)}" /></td>
       <td>
         <div class="cell-stack">
           <strong>${escapeHtml(user.email)}</strong>
-          <small>${escapeHtml(user.name)}</small>
+          <small>${escapeHtml(user.name)}${warningCount ? ` · ${warningCount} 条待确认警告` : ""}</small>
         </div>
       </td>
       <td><strong>${Number(user.credits || 0)}</strong></td>
@@ -1628,6 +1635,7 @@ function showUserDetail(id) {
   if (!user) return;
   const jobs = state.jobs.filter((job) => job.userId === user.id);
   const spent = jobs.reduce((sum, job) => sum + Number(job.costCredits || 0), 0);
+  const warnings = userWarnings(user);
   openDrawer(user.email, user.name || user.id, `
     <div class="detail-section">
       <h3>账号</h3>
@@ -1642,12 +1650,50 @@ function showUserDetail(id) {
       ${fieldRow("积分消耗", spent)}
     </div>
     <div class="detail-section">
+      <h3>风险警告</h3>
+      ${fieldRow("待确认", warnings.length)}
+      ${warnings.length ? `
+        <div class="warning-list">
+          ${warnings.slice(0, 3).map((warning) => `
+            <div class="warning-item">
+              <strong>${escapeHtml(formatDate(warning.createdAt))}</strong>
+              <span>${escapeHtml(clip(warning.message, 96))}</span>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<p class="drawer-helper">暂无待确认警告</p>`}
+      <button class="drawer-action warning-action" type="button" data-drawer-action="warn-user" data-user-id="${escapeHtml(user.id)}">发送风险警告</button>
+    </div>
+    <div class="detail-section">
       <h3>积分调整</h3>
       <div class="drawer-credit-form">
         <label>调整值<input id="drawerCreditAmount" type="number" placeholder="+100 / -20" /></label>
         <label>原因<input id="drawerCreditReason" placeholder="调整原因" /></label>
         <div class="drawer-credit-actions">
           <button class="primary" id="drawerCreditSubmit" type="button" data-user-id="${escapeHtml(user.id)}">确认调额</button>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+function showUserWarningForm(id) {
+  const user = state.users.find((item) => item.id === id);
+  if (!user) return;
+  openDrawer("发送风险警告", user.email, `
+    <div class="detail-section">
+      <h3>警告对象</h3>
+      ${fieldRow("用户", user.email)}
+      ${fieldRow("用户 ID", user.id)}
+    </div>
+    <div class="detail-section">
+      <h3>弹窗内容</h3>
+      <div class="drawer-warning-form">
+        <label>类别<input id="drawerWarningCategory" value="risk" maxlength="80" /></label>
+        <label>警告文案<textarea id="drawerWarningMessage" rows="6" maxlength="2000">${escapeHtml(DEFAULT_USER_WARNING_MESSAGE)}</textarea></label>
+        <p class="drawer-helper">用户下次刷新或登录后会收到可关闭弹窗，关闭后标记为已确认。</p>
+        <div class="drawer-credit-actions">
+          <button class="primary" id="drawerWarningSubmit" type="button" data-user-id="${escapeHtml(user.id)}">发送警告</button>
         </div>
       </div>
     </div>
@@ -2650,6 +2696,7 @@ $("userRows").addEventListener("click", async (event) => {
           <div class="drawer-action-list">
             <button class="drawer-action" type="button" data-drawer-action="detail-user" data-user-id="${escapeHtml(user.id)}">查看详情</button>
             <button class="drawer-action" type="button" data-drawer-action="credit-user" data-user-id="${escapeHtml(user.id)}">调整积分</button>
+            <button class="drawer-action" type="button" data-drawer-action="warn-user" data-user-id="${escapeHtml(user.id)}">发送风险警告</button>
           </div>
         </div>
       `);
@@ -2673,7 +2720,7 @@ $("userRows").addEventListener("click", async (event) => {
 });
 
 $("drawerBody").addEventListener("click", async (event) => {
-  const drawerButton = event.target.closest("[data-drawer-action], #drawerCreditSubmit");
+  const drawerButton = event.target.closest("[data-drawer-action], #drawerCreditSubmit, #drawerWarningSubmit");
   if (!drawerButton) return;
   try {
     const gatewayId = drawerButton.dataset.gatewayId;
@@ -2742,6 +2789,22 @@ $("drawerBody").addEventListener("click", async (event) => {
       return;
     }
 
+    if (drawerButton.id === "drawerWarningSubmit") {
+      const userId = drawerButton.dataset.userId;
+      const message = $("drawerWarningMessage")?.value.trim() || DEFAULT_USER_WARNING_MESSAGE;
+      const category = $("drawerWarningCategory")?.value.trim() || "risk";
+      const { user, warning } = await withBusy(drawerButton, "发送中", () => api("/api/admin/user-warnings", {
+        method: "POST",
+        body: JSON.stringify({ userId, message, category }),
+      }));
+      upsertById(state.users, user);
+      appendAuditLog("user.warning.create", userId, { warningId: warning?.id, category });
+      rerenderAfterMutation();
+      toast("风险警告已发送", "success");
+      showUserDetail(userId);
+      return;
+    }
+
     const action = drawerButton.dataset.drawerAction;
     const userId = drawerButton.dataset.userId;
     if (!userId) return;
@@ -2753,6 +2816,11 @@ $("drawerBody").addEventListener("click", async (event) => {
 
     if (action === "credit-user") {
       showUserDetail(userId);
+      return;
+    }
+
+    if (action === "warn-user") {
+      showUserWarningForm(userId);
       return;
     }
 

@@ -1724,6 +1724,88 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
 #closeAuth { color: var(--text); background: var(--surface-2); }
 #closeAuth:hover { background: var(--surface-3); color: var(--ink); }
 
+.account-warning-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  color: var(--ink);
+  background: #fffaf5;
+  box-shadow: 0 24px 60px rgba(154,52,18,.18), 0 8px 24px rgba(17,24,39,.12);
+}
+
+.account-warning-dialog::backdrop {
+  background: rgba(17,24,39,.34);
+  backdrop-filter: blur(4px);
+}
+
+.account-warning-box {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px;
+}
+
+.account-warning-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #fdba74;
+  border-radius: 50%;
+  color: #9a3412;
+  background: #ffedd5;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.account-warning-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.account-warning-copy span {
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.account-warning-copy h2 {
+  margin: 0;
+  color: #7c2d12;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.account-warning-copy p {
+  margin: 0;
+  color: #3f2a1f;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.account-warning-actions {
+  grid-column: 2;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-warning-actions button {
+  height: 36px;
+  min-width: 92px;
+  padding: 0 16px;
+  border: 1px solid #9a3412;
+  border-radius: 6px;
+  color: #fff;
+  background: #9a3412;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-warning-actions button:hover { background: #7c2d12; }
+
 /* Loading state */
 button.is-loading { position: relative; cursor: wait; }
 
@@ -1877,7 +1959,14 @@ button.is-loading { position: relative; cursor: wait; }
   }
   .toast { width: 100%; max-width: none; }
 
-  .auth-dialog { width: min(100%, calc(100vw - 24px)); }
+  .auth-dialog,
+  .account-warning-dialog { width: min(100%, calc(100vw - 24px)); }
+
+  .account-warning-box {
+    grid-template-columns: 1fr;
+  }
+
+  .account-warning-actions { grid-column: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

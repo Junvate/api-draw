@@ -12,6 +12,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -65,5 +66,12 @@ public class AuthController {
     } catch (Exception ignored) {
       return Maps.of("user", null);
     }
+  }
+
+  @PostMapping("/me/warnings/{id}/ack")
+  public Map<String, Object> acknowledgeWarning(HttpServletRequest request, @PathVariable String id) {
+    User user = auth.validateSession(request);
+    auth.acknowledgeWarning(user.id(), id);
+    return Maps.of("ok", true, "user", auth.publicUser(user));
   }
 }

@@ -273,6 +273,20 @@
         </form>
       </dialog>
 
+      <dialog class="account-warning-dialog" id="accountWarningDialog">
+        <form class="account-warning-box" id="accountWarningForm">
+          <div class="account-warning-mark">!</div>
+          <div class="account-warning-copy">
+            <span id="accountWarningMeta">账号风险警告</span>
+            <h2>账号风险警告</h2>
+            <p id="accountWarningMessage">系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。</p>
+          </div>
+          <div class="account-warning-actions">
+            <button type="submit" id="accountWarningDismiss">我已知晓</button>
+          </div>
+        </form>
+      </dialog>
+
       <div class="toast-stack" id="toastStack" popover="manual" aria-live="polite" aria-atomic="true"></div>
     </div>
 

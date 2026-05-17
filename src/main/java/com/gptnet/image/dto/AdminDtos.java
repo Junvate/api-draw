@@ -56,6 +56,22 @@ public final class AdminDtos {
     public void setReason(String reason) { this.reason = reason; }
   }
 
+  public static class UserWarningRequest {
+    @Size(max = 80)
+    private String userId;
+    @Size(max = 80)
+    private String category;
+    @Size(max = 2000)
+    private String message;
+
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+    public String getMessage() { return message; }
+    public void setMessage(String message) { this.message = message; }
+  }
+
   public static class CallSquareTestRequest {
     @Size(max = 500)
     private String url;

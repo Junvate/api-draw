@@ -6,6 +6,7 @@ import com.gptnet.image.dto.AdminDtos.CreditsRequest;
 import com.gptnet.image.dto.AdminDtos.GatewayRequest;
 import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
 import com.gptnet.image.dto.AdminDtos.RedemptionCodeRequest;
+import com.gptnet.image.dto.AdminDtos.UserWarningRequest;
 import com.gptnet.image.model.Gateway;
 import com.gptnet.image.model.ImageTask;
 import com.gptnet.image.model.RedemptionCode;
@@ -43,6 +44,7 @@ public class AdminService {
   private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
   private static final String CALL_SQUARE_API_KEY_KEY = "call_square_api_key";
+  private static final String DEFAULT_USER_WARNING_MESSAGE = "系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。";
   private static final String DEFAULT_CALL_SQUARE_REQUEST_BODY = """
     {
       "model": "gpt-image-2",
@@ -224,6 +226,34 @@ public class AdminService {
     auth.addWalletEntry(body.getUserId(), body.getAmount(), "admin_adjust", ref, actor.id());
     audit(actor, request, "credits.change", body.getUserId(), Maps.of("amount", body.getAmount(), "reason", Optional.ofNullable(body.getReason()).orElse("admin_adjust")));
     return Maps.of("user", auth.publicUser(db.userById(body.getUserId()).orElseThrow(() -> AppException.notFound("用户不存在"))));
+  }
+
+  @Transactional
+  public Map<String, Object> warnUser(User actor, HttpServletRequest request, UserWarningRequest body) {
+    String userId = Optional.ofNullable(body.getUserId()).orElse("").trim();
+    if (userId.isBlank()) throw AppException.badRequest("VALIDATION_FAILED", "用户不能为空");
+    User target = db.userById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+    String category = Optional.ofNullable(body.getCategory()).orElse("risk").trim();
+    if (category.isBlank()) category = "risk";
+    String message = Optional.ofNullable(body.getMessage()).orElse("").trim();
+    if (message.isBlank()) message = DEFAULT_USER_WARNING_MESSAGE;
+    String id = db.id();
+    db.jdbc().update("""
+      INSERT INTO "UserWarning" ("id", "userId", "actorId", "category", "message")
+      VALUES (:id, :userId, :actorId, :category, :message)
+      """, new MapSqlParameterSource()
+      .addValue("id", id)
+      .addValue("userId", userId)
+      .addValue("actorId", actor.id())
+      .addValue("category", category)
+      .addValue("message", message));
+    Map<String, Object> warning = warningById(id);
+    audit(actor, request, "user.warning.create", userId, Maps.of(
+      "warningId", id,
+      "category", category,
+      "message", message
+    ));
+    return Maps.of("warning", warning, "user", auth.publicUser(target));
   }
 
   public Map<String, Object> gateways() {
@@ -877,6 +907,22 @@ public class AdminService {
       }
     }
     throw AppException.unavailable("CODE_GENERATION_FAILED", "兑换码生成失败，请重试");
+  }
+
+  private Map<String, Object> warningById(String id) {
+    return db.jdbc().queryForObject("""
+      SELECT "id", "userId", "actorId", "category", "message", "acknowledgedAt", "createdAt"
+      FROM "UserWarning"
+      WHERE "id" = :id
+      """, Map.of("id", id), (rs, rowNum) -> Maps.of(
+        "id", rs.getString("id"),
+        "userId", rs.getString("userId"),
+        "actorId", rs.getString("actorId"),
+        "category", rs.getString("category"),
+        "message", rs.getString("message"),
+        "acknowledgedAt", rs.getTimestamp("acknowledgedAt") == null ? null : rs.getTimestamp("acknowledgedAt").toInstant(),
+        "createdAt", rs.getTimestamp("createdAt") == null ? null : rs.getTimestamp("createdAt").toInstant()
+      ));
   }
 
   public Map<String, Object> publicGateway(Gateway gateway) {

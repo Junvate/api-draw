@@ -8,6 +8,7 @@ import com.gptnet.image.dto.AdminDtos.PatchUserRequest;
 import com.gptnet.image.dto.AdminDtos.RedemptionCodeRequest;
 import com.gptnet.image.dto.AdminDtos.SensitiveWordRulePatchRequest;
 import com.gptnet.image.dto.AdminDtos.SensitiveWordRulesRequest;
+import com.gptnet.image.dto.AdminDtos.UserWarningRequest;
 import com.gptnet.image.model.User;
 import com.gptnet.image.service.AdminService;
 import com.gptnet.image.service.AuthService;
@@ -77,6 +78,12 @@ public class AdminController {
   public Map<String, Object> credits(HttpServletRequest request, @Valid @RequestBody CreditsRequest body) {
     User actor = requireAdmin(request);
     return admin.credits(actor, request, body);
+  }
+
+  @PostMapping("/user-warnings")
+  public Map<String, Object> warnUser(HttpServletRequest request, @Valid @RequestBody UserWarningRequest body) {
+    User actor = requireAdmin(request);
+    return admin.warnUser(actor, request, body);
   }
 
   @GetMapping("/gateways")

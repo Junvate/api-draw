@@ -167,8 +167,32 @@ public class AuthService {
       "status", user.status(),
       "createdAt", user.createdAt(),
       "updatedAt", user.updatedAt(),
-      "credits", db.walletBalance(user.id())
+      "credits", db.walletBalance(user.id()),
+      "warnings", pendingWarnings(user.id())
     );
+  }
+
+  public List<Map<String, Object>> pendingWarnings(String userId) {
+    return db.jdbc().query("""
+      SELECT "id", "category", "message", "createdAt"
+      FROM "UserWarning"
+      WHERE "userId" = :userId AND "acknowledgedAt" IS NULL
+      ORDER BY "createdAt" DESC
+      LIMIT 5
+      """, Map.of("userId", userId), (rs, rowNum) -> Maps.of(
+        "id", rs.getString("id"),
+        "category", rs.getString("category"),
+        "message", rs.getString("message"),
+        "createdAt", rs.getTimestamp("createdAt") == null ? null : rs.getTimestamp("createdAt").toInstant()
+      ));
+  }
+
+  public void acknowledgeWarning(String userId, String warningId) {
+    db.jdbc().update("""
+      UPDATE "UserWarning"
+      SET "acknowledgedAt" = now()
+      WHERE "id" = :id AND "userId" = :userId AND "acknowledgedAt" IS NULL
+      """, Map.of("id", warningId, "userId", userId));
   }
 
   public Map<String, Object> publicApiKey(ApiKey apiKey) {

@@ -2391,12 +2391,67 @@ input.is-dirty, select.is-dirty {
 
 .drawer-credit-form label { gap: 4px; }
 
+.drawer-warning-form { display: grid; gap: 10px; }
+
+.drawer-warning-form label { gap: 5px; }
+
+.drawer-warning-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 132px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  font: inherit;
+  line-height: 1.6;
+}
+
+.drawer-warning-form textarea:focus {
+  outline: none;
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, .12);
+}
+
 .drawer-credit-actions { display: flex; }
 
 .drawer-helper {
   font-size: 11px;
   color: var(--text-muted);
   padding: 4px 0;
+}
+
+.warning-list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.warning-item {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: var(--radius);
+  background: #fff7ed;
+}
+
+.warning-item strong {
+  color: #9a3412;
+  font-size: 11px;
+}
+
+.warning-item span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.warning-action {
+  border-color: #fed7aa;
+  color: #9a3412;
+  background: #fff7ed;
 }
 
 /* Drawer preview */

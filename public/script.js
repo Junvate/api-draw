@@ -84,10 +84,16 @@ const imageUpload = $("imageUpload");
 const referenceTray = $("referenceTray");
 const clearReferences = $("clearReferences");
 const authDialog = $("authDialog");
+const accountWarningDialog = $("accountWarningDialog");
+const accountWarningForm = $("accountWarningForm");
+const accountWarningMessage = $("accountWarningMessage");
+const accountWarningMeta = $("accountWarningMeta");
 const captchaImage = $("captchaImage");
 const authCaptchaId = $("authCaptchaId");
 const authCaptchaCode = $("authCaptchaCode");
 let authMode = "login";
+let activeAccountWarningId = null;
+const DEFAULT_ACCOUNT_WARNING_MESSAGE = "系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。";
 const promptCounter = $("promptCounter");
 const composerToggle = $("composerToggle");
 const composerRail = $("composerRail");
@@ -424,6 +430,39 @@ function updateAccount(user) {
     $("gatewayList").replaceChildren();
   }
   document.dispatchEvent(new CustomEvent("accountUpdated", { detail: user }));
+}
+
+function formatWarningDate(value) {
+  if (!value) return "账号风险警告";
+  return new Date(value).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function firstPendingWarning(user) {
+  const warnings = Array.isArray(user?.warnings) ? user.warnings : [];
+  return warnings[0] || null;
+}
+
+function showAccountWarningIfNeeded(user) {
+  const warning = firstPendingWarning(user);
+  if (!warning || !accountWarningDialog) return;
+  if (accountWarningDialog.open && activeAccountWarningId === warning.id) return;
+  activeAccountWarningId = warning.id;
+  accountWarningMessage.textContent = warning.message || DEFAULT_ACCOUNT_WARNING_MESSAGE;
+  accountWarningMeta.textContent = `账号风险警告 · ${formatWarningDate(warning.createdAt)}`;
+  if (!accountWarningDialog.open) accountWarningDialog.showModal();
+}
+
+async function acknowledgeActiveWarning() {
+  const warningId = activeAccountWarningId;
+  if (!warningId) return;
+  activeAccountWarningId = null;
+  try {
+    const { user } = await api(`/api/me/warnings/${encodeURIComponent(warningId)}/ack`, { method: "POST" });
+    updateAccount(user);
+    window.setTimeout(() => showAccountWarningIfNeeded(user), 80);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function updateTask() {
@@ -876,6 +915,7 @@ async function refreshMe({ throwOnError = false } = {}) {
       return null;
     }
     updateAccount(user);
+    showAccountWarningIfNeeded(user);
     if (user?.role === "admin") await loadAdmin({ silent: true });
     return user;
   } catch {
@@ -940,6 +980,7 @@ async function loginOrRegister(path) {
   const { user } = await api(path, { method: "POST", body: JSON.stringify(payload) });
   updateAccount(user);
   authDialog.close();
+  showAccountWarningIfNeeded(user);
   showToast(isRegister ? "注册成功，已发放新用户积分" : "登录成功");
   // 后台刷新，不阻塞 UI
   refreshJobs({ silent: true }).then((jobs) => {
@@ -1257,6 +1298,32 @@ authDialog.addEventListener("click", (event) => {
   const rect = authDialog.getBoundingClientRect();
   const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
   if (!inside) authDialog.close();
+});
+
+accountWarningForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.submitter || $("accountWarningDismiss");
+  setButtonLoading(button, true, "确认中");
+  try {
+    await acknowledgeActiveWarning();
+    accountWarningDialog.close();
+  } finally {
+    setButtonLoading(button, false);
+  }
+});
+
+accountWarningDialog.addEventListener("click", async (event) => {
+  const rect = accountWarningDialog.getBoundingClientRect();
+  const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+  if (!inside) {
+    await acknowledgeActiveWarning();
+    accountWarningDialog.close();
+  }
+});
+
+accountWarningDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  acknowledgeActiveWarning().finally(() => accountWarningDialog.close());
 });
 
 $("logoutButton").addEventListener("click", async () => {
