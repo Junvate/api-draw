@@ -101,6 +101,7 @@ public class OperationsController {
       "gateway", Maps.of(
         "distributed", true,
         "concurrency", queue.concurrency(),
+        "workers", queue.startedWorkers(),
         "active", counts.active(),
         "queued", counts.waiting() + counts.delayed(),
         "recentErrors24h", recentErrors

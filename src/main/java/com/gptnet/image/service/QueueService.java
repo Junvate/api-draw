@@ -39,6 +39,7 @@ public class QueueService {
   private final long stalledTaskMs;
   private final long queueLimit;
   private final AtomicLong lastMaintenanceAt = new AtomicLong(0);
+  private final AtomicLong startedWorkers = new AtomicLong(0);
   private ImageService imageService;
   private ExecutorService executor;
 
@@ -130,6 +131,7 @@ public class QueueService {
     executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("image-worker-", 0).factory());
     for (int index = 0; index < concurrency; index += 1) {
       executor.submit(this::workerLoop);
+      startedWorkers.incrementAndGet();
     }
   }
 
@@ -147,6 +149,10 @@ public class QueueService {
 
   public int concurrency() {
     return concurrency;
+  }
+
+  public long startedWorkers() {
+    return startedWorkers.get();
   }
 
   private void workerLoop() {

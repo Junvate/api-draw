@@ -847,12 +847,13 @@ function pruneSelections() {
 }
 
 function renderRuntime(ready) {
+  const actualConcurrency = ready.gateway?.workers ?? ready.gateway?.concurrency ?? 0;
   $("redisChip").textContent = `Redis ${ready.redis ? "正常" : "未启用"}`;
   $("redisChip").className = `chip ${ready.redis ? "ok" : "warn"}`;
-  $("gatewayChip").textContent = `并发 ${ready.gateway?.active || 0}/${ready.gateway?.concurrency || 0}`;
+  $("gatewayChip").textContent = `并发 ${ready.gateway?.active || 0}/${actualConcurrency}`;
   $("gatewayChip").className = `chip ${(ready.gateway?.active || 0) > 0 ? "ok" : "warn"}`;
   $("sideHealth").textContent = ready.ok ? "服务正常" : "服务异常";
-  $("sideHealthMeta").textContent = `${ready.redis ? "Redis 已连接" : "Redis 未启用"} · 并发 ${ready.gateway?.concurrency || 0}`;
+  $("sideHealthMeta").textContent = `${ready.redis ? "Redis 已连接" : "Redis 未启用"} · 并发 ${actualConcurrency}`;
   $("lastRefresh").textContent = `刷新于 ${formatShortDate(new Date())}`;
 }
 
@@ -2215,10 +2216,11 @@ function switchView(view) {
 }
 
 function renderSystemCards(ready, metrics) {
+  const actualConcurrency = ready.gateway?.workers ?? ready.gateway?.concurrency ?? 0;
   const metricLines = String(metrics || "").split("\n").filter((line) => line && !line.startsWith("#")).length;
   $("systemCards").innerHTML = [
     statCard("Redis", ready.redis ? "正常" : "未启用", ready.redis ? "分布式能力已连接" : "当前为单机内存队列"),
-    statCard("网关并发", `${ready.gateway?.active || 0}/${ready.gateway?.concurrency || 0}`, ready.gateway?.distributed ? "Redis 分布式锁" : "本地限流"),
+    statCard("网关并发", `${ready.gateway?.active || 0}/${actualConcurrency}`, `配置 ${ready.gateway?.concurrency || 0} · 实际 worker ${actualConcurrency}`),
     statCard("任务队列", ready.queue?.mode || "-", `${ready.queue?.processed || 0} 已处理 · ${ready.queue?.failed || 0} 失败`),
     statCard("启动恢复", ready.queue?.recovered || 0, ready.queue?.lastRecoveredAt ? formatRelative(ready.queue.lastRecoveredAt) : "无待恢复任务"),
     statCard("等待队列", ready.gateway?.queued || 0, "本机 limiter 队列"),
