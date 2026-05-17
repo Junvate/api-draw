@@ -415,7 +415,7 @@ export class ImageService {
       { name: "response_format", value: "url" },
       { name: "n", value: String(task.imageCount) },
       ...referenceImages.map((image) => ({
-        name: "image",
+        name: "image[]",
         value: image.buffer,
         filename: image.filename,
         contentType: image.contentType,
@@ -498,13 +498,13 @@ export class ImageService {
 
   private validateReferenceFiles(files: UploadedImageFile[]) {
     const cleanFiles = files.filter((file) => file?.buffer?.length);
-    if (cleanFiles.length > 3) throw new BadRequestException({ error: "TOO_MANY_REFERENCE_IMAGES", message: "参考图最多上传 3 张" });
+    if (cleanFiles.length > 16) throw new BadRequestException({ error: "TOO_MANY_REFERENCE_IMAGES", message: "参考图最多上传 16 张" });
     for (const file of cleanFiles) {
-      if (!file.mimetype?.startsWith("image/")) {
-        throw new BadRequestException({ error: "INVALID_REFERENCE_IMAGE", message: "参考图必须是图片文件" });
+      if (!this.isSupportedReferenceImage(file.mimetype, file.originalname)) {
+        throw new BadRequestException({ error: "INVALID_REFERENCE_IMAGE", message: "参考图仅支持 PNG、JPG、WEBP" });
       }
-      if ((file.size || file.buffer.length) > 10 * 1024 * 1024) {
-        throw new BadRequestException({ error: "REFERENCE_IMAGE_TOO_LARGE", message: "单张参考图不能超过 10MB" });
+      if ((file.size || file.buffer.length) > 50 * 1024 * 1024) {
+        throw new BadRequestException({ error: "REFERENCE_IMAGE_TOO_LARGE", message: "单张参考图不能超过 50MB" });
       }
     }
     return cleanFiles;
@@ -530,7 +530,7 @@ export class ImageService {
     const selected = files
       .filter((file) => /\.(png|jpe?g|webp)$/i.test(file))
       .sort()
-      .slice(0, 3);
+      .slice(0, 16);
     return Promise.all(selected.map(async (file) => {
       const extension = extname(file).replace(".", "").toLowerCase();
       return {
@@ -551,6 +551,13 @@ export class ImageService {
     if (byMime) return byMime;
     const extension = extname(filename || "").replace(".", "").toLowerCase();
     return ["png", "jpg", "jpeg", "webp"].includes(extension) ? (extension === "jpeg" ? "jpg" : extension) : "png";
+  }
+
+  private isSupportedReferenceImage(mimetype?: string, filename?: string) {
+    const mime = String(mimetype || "").toLowerCase();
+    if (["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(mime)) return true;
+    const extension = extname(filename || "").replace(".", "").toLowerCase();
+    return ["png", "jpg", "jpeg", "webp"].includes(extension);
   }
 
   private mimeForExtension(extension: string) {

@@ -315,6 +315,20 @@
   "format": "png"
 }</textarea>
                   </label>
+                  <div class="call-square-reference-field">
+                    <div class="call-square-reference-head">
+                      <span>参考图</span>
+                      <button class="ghost hidden" id="callSquareClearReferences" type="button">清空</button>
+                    </div>
+                    <label class="call-square-upload" for="callSquareImages">
+                      <input id="callSquareImages" name="image" type="file" accept="image/*" multiple />
+                      <strong>上传参考图</strong>
+                      <span>最多 16 张，每张 50MB；上传后将按 OpenAI edits 格式请求。</span>
+                    </label>
+                    <div class="call-square-reference-tray empty" id="callSquareReferenceTray">
+                      <span>暂无参考图</span>
+                    </div>
+                  </div>
                   <div class="call-square-actions">
                     <button class="primary" id="callSquareSubmit" type="submit">生成测试</button>
                     <button id="callSquareSaveConfig" type="button">保存配置</button>

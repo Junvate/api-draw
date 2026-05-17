@@ -60,10 +60,11 @@ public class ImageController {
     @RequestParam(required = false) String background,
     @RequestParam(required = false) Integer refs,
     @RequestParam(value = "response_mode", required = false) String responseMode,
-    @RequestPart(value = "image", required = false) List<MultipartFile> files
+    @RequestPart(value = "image", required = false) List<MultipartFile> files,
+    @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
     CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, responseMode);
-    return generateInternal(request, body, files == null ? List.of() : files);
+    return generateInternal(request, body, mergeFiles(files, imageArrayFiles));
   }
 
   @GetMapping("/credits/history")
@@ -138,5 +139,12 @@ public class ImageController {
     body.setRefs(refs);
     body.setResponse_mode(responseMode);
     return body;
+  }
+
+  private List<MultipartFile> mergeFiles(List<MultipartFile> first, List<MultipartFile> second) {
+    return java.util.stream.Stream.concat(
+      first == null ? java.util.stream.Stream.empty() : first.stream(),
+      second == null ? java.util.stream.Stream.empty() : second.stream()
+    ).toList();
   }
 }

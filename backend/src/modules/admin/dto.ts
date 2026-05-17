@@ -135,6 +135,11 @@ export class RedemptionCodeDto {
   code?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  activityKey?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -161,6 +166,11 @@ export class RedemptionCodeDto {
 }
 
 export class PatchRedemptionCodeDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  activityKey?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

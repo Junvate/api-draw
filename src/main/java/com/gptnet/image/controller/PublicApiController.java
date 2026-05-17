@@ -75,10 +75,11 @@ public class PublicApiController {
     @RequestParam(required = false) String background,
     @RequestParam(required = false) Integer refs,
     @RequestParam(value = "response_mode", required = false) String responseMode,
-    @RequestPart(value = "image", required = false) List<MultipartFile> files
+    @RequestPart(value = "image", required = false) List<MultipartFile> files,
+    @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
     CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, responseMode);
-    return createInternal(request, idempotencyKey, body, files == null ? List.of() : files);
+    return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
   @PostMapping(value = "/images/edits", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -95,10 +96,11 @@ public class PublicApiController {
     @RequestParam(required = false) String background,
     @RequestParam(required = false) Integer refs,
     @RequestParam(value = "response_mode", required = false) String responseMode,
-    @RequestPart(value = "image", required = false) List<MultipartFile> files
+    @RequestPart(value = "image", required = false) List<MultipartFile> files,
+    @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
     CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, responseMode);
-    return createInternal(request, idempotencyKey, body, files == null ? List.of() : files);
+    return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
   @PostMapping(value = "/images/edits", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -152,5 +154,12 @@ public class PublicApiController {
     body.setRefs(refs);
     body.setResponse_mode(responseMode);
     return body;
+  }
+
+  private List<MultipartFile> mergeFiles(List<MultipartFile> first, List<MultipartFile> second) {
+    return java.util.stream.Stream.concat(
+      first == null ? java.util.stream.Stream.empty() : first.stream(),
+      second == null ? java.util.stream.Stream.empty() : second.stream()
+    ).toList();
   }
 }

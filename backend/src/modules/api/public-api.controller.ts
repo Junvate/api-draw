@@ -26,7 +26,7 @@ export class PublicApiController {
   }
 
   @Post("images/generations")
-  @UseInterceptors(FilesInterceptor("image", 3, { limits: { fileSize: 10 * 1024 * 1024, files: 3 } }))
+  @UseInterceptors(FilesInterceptor("image[]", 16, { limits: { fileSize: 50 * 1024 * 1024, files: 16 } }))
   @HttpCode(HttpStatus.ACCEPTED)
   async create(
     @Req() req: AuthedRequest,
@@ -53,7 +53,7 @@ export class PublicApiController {
   }
 
   @Post("images/edits")
-  @UseInterceptors(FilesInterceptor("image", 3, { limits: { fileSize: 10 * 1024 * 1024, files: 3 } }))
+  @UseInterceptors(FilesInterceptor("image[]", 16, { limits: { fileSize: 50 * 1024 * 1024, files: 16 } }))
   @HttpCode(HttpStatus.ACCEPTED)
   async edit(
     @Req() req: AuthedRequest,

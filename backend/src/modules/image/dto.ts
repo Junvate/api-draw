@@ -41,7 +41,7 @@ export class CreateImageDto {
   @Transform(({ value }) => value === undefined || value === "" ? undefined : Number(value))
   @IsInt()
   @Min(0)
-  @Max(3)
+  @Max(16)
   refs?: number;
 
   @IsOptional()

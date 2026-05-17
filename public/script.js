@@ -234,16 +234,21 @@ function clearThumbPreviews() {
 
 function appendReferenceFiles(files) {
   const incoming = Array.from(files || []);
-  const MAX = 10 * 1024 * 1024;
+  const MAX = 50 * 1024 * 1024;
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+  const invalid = incoming.find((file) => !allowedTypes.has(String(file.type || "").toLowerCase()));
+  if (invalid) {
+    throw new Error("参考图仅支持 PNG、JPG、WEBP");
+  }
   const oversized = incoming.filter((file) => file.size > MAX);
   if (oversized.length) {
-    throw new Error(`图片过大（最大 10MB）：${oversized.map((file) => file.name).join("、")}`);
+    throw new Error(`图片过大（最大 50MB）：${oversized.map((file) => file.name).join("、")}`);
   }
   if (!incoming.length) {
     imageUpload.value = "";
     return state.referenceFiles.length;
   }
-  const merged = [...state.referenceFiles, ...incoming].slice(0, 3);
+  const merged = [...state.referenceFiles, ...incoming].slice(0, 16);
   state.previewUrls.forEach((url) => URL.revokeObjectURL(url));
   state.previewUrls = [];
   state.referenceFiles = merged;
@@ -287,7 +292,7 @@ function renderReferencePreviews(files) {
     item.append(img, badge, del);
     referenceTray.appendChild(item);
   });
-  if (files.length > 0 && files.length < 3) {
+  if (files.length > 0 && files.length < 16) {
     const addBtn = document.createElement("button");
     addBtn.type = "button";
     addBtn.className = "reference-add-btn";
@@ -355,7 +360,7 @@ function createGeneratePayload(prompt) {
   }
   const body = new FormData();
   Object.entries(payload).forEach(([key, value]) => body.append(key, String(value)));
-  state.referenceFiles.forEach((file) => body.append("image", file, file.name));
+  state.referenceFiles.forEach((file) => body.append("image[]", file, file.name));
   return { body, headers: {} };
 }
 
@@ -427,7 +432,7 @@ function updateTask() {
   $("taskModel").textContent = state.model;
   $("taskType").textContent = state.type;
   $("taskRatio").textContent = state.ratio;
-  $("taskRefs").textContent = `${state.refs}/3`;
+  $("taskRefs").textContent = `${state.refs}/16`;
 }
 
 function updatePromptCounter() {

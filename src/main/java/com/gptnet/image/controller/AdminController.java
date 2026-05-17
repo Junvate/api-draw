@@ -16,6 +16,7 @@ import com.gptnet.image.support.Maps;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.Map;
+import java.util.List;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -24,7 +25,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.MediaType;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -111,10 +115,45 @@ public class AdminController {
     return admin.healthAll(actor, request);
   }
 
-  @PostMapping("/call-square/test")
+  @PostMapping(value = "/call-square/test", consumes = MediaType.APPLICATION_JSON_VALUE)
   public Map<String, Object> callSquareTest(HttpServletRequest request, @Valid @RequestBody CallSquareTestRequest body) {
     User actor = requireAdmin(request);
-    return admin.callSquareTest(actor, request, body);
+    return admin.callSquareTest(actor, request, body, List.of());
+  }
+
+  @PostMapping(value = "/call-square/test", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public Map<String, Object> callSquareTestMultipart(
+    HttpServletRequest request,
+    @RequestParam(required = false) String url,
+    @RequestParam(required = false) String baseUrl,
+    @RequestParam(required = false) String apiKey,
+    @RequestParam(required = false) String model,
+    @RequestParam(required = false) String prompt,
+    @RequestParam(required = false) String upstreamGroup,
+    @RequestParam(required = false) String size,
+    @RequestParam(required = false) String outputFormat,
+    @RequestParam(required = false) String quality,
+    @RequestParam(required = false) String background,
+    @RequestParam(required = false) String requestBody,
+    @RequestParam(required = false) Integer timeoutMs,
+    @RequestPart(value = "image", required = false) List<MultipartFile> files,
+    @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
+  ) {
+    User actor = requireAdmin(request);
+    CallSquareTestRequest body = new CallSquareTestRequest();
+    body.setUrl(url);
+    body.setBaseUrl(baseUrl);
+    body.setApiKey(apiKey);
+    body.setModel(model);
+    body.setPrompt(prompt);
+    body.setUpstreamGroup(upstreamGroup);
+    body.setSize(size);
+    body.setOutputFormat(outputFormat);
+    body.setQuality(quality);
+    body.setBackground(background);
+    body.setRequestBody(requestBody);
+    body.setTimeoutMs(timeoutMs);
+    return admin.callSquareTest(actor, request, body, mergeFiles(files, imageArrayFiles));
   }
 
   @GetMapping("/call-square/config")
@@ -167,6 +206,12 @@ public class AdminController {
   public Map<String, Object> patchCode(HttpServletRequest request, @PathVariable String id, @Valid @RequestBody RedemptionCodeRequest body) {
     User actor = requireAdmin(request);
     return admin.patchCode(actor, request, id, body);
+  }
+
+  @DeleteMapping("/redemption-codes/{id}")
+  public Map<String, Object> deleteCode(HttpServletRequest request, @PathVariable String id) {
+    User actor = requireAdmin(request);
+    return admin.deleteCode(actor, request, id);
   }
 
   @GetMapping("/settings")
@@ -223,5 +268,12 @@ public class AdminController {
     User user = auth.validateSession(request);
     auth.requireAdmin(user);
     return user;
+  }
+
+  private List<MultipartFile> mergeFiles(List<MultipartFile> first, List<MultipartFile> second) {
+    return java.util.stream.Stream.concat(
+      first == null ? java.util.stream.Stream.empty() : first.stream(),
+      second == null ? java.util.stream.Stream.empty() : second.stream()
+    ).toList();
   }
 }

@@ -34,6 +34,8 @@ import org.slf4j.LoggerFactory;
 @Service
 public class ImageService {
   private static final Logger log = LoggerFactory.getLogger(ImageService.class);
+  private static final int MAX_REFERENCE_IMAGES = 16;
+  private static final long MAX_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
   private final Db db;
   private final SecurityService security;
   private final AuthService auth;
@@ -687,7 +689,7 @@ public class ImageService {
     parts.add(Part.text("size", task.size()));
     parts.add(Part.text("n", String.valueOf(n)));
     for (LoadedReferenceImage image : referenceImages) {
-      parts.add(Part.file("image", image.bytes(), image.filename(), image.contentType()));
+      parts.add(Part.file("image[]", image.bytes(), image.filename(), image.contentType()));
     }
     String editUrl = upstreamUrl(gateway.baseUrl(), editPath);
     if (shouldRequestUrlResponse(editUrl, task.model())) parts.add(Part.text("response_format", "url"));
@@ -754,13 +756,13 @@ public class ImageService {
 
   private List<MultipartFile> validateReferenceFiles(List<MultipartFile> files) {
     List<MultipartFile> clean = files.stream().filter(file -> file != null && !file.isEmpty()).toList();
-    if (clean.size() > 3) throw AppException.badRequest("TOO_MANY_REFERENCE_IMAGES", "参考图最多上传 3 张");
+    if (clean.size() > MAX_REFERENCE_IMAGES) throw AppException.badRequest("TOO_MANY_REFERENCE_IMAGES", "参考图最多上传 16 张");
     for (MultipartFile file : clean) {
-      if (file.getContentType() == null || !file.getContentType().startsWith("image/")) {
-        throw AppException.badRequest("INVALID_REFERENCE_IMAGE", "参考图必须是图片文件");
+      if (!isSupportedReferenceImage(file.getContentType(), file.getOriginalFilename())) {
+        throw AppException.badRequest("INVALID_REFERENCE_IMAGE", "参考图仅支持 PNG、JPG、WEBP");
       }
-      if (file.getSize() > 10L * 1024L * 1024L) {
-        throw AppException.badRequest("REFERENCE_IMAGE_TOO_LARGE", "单张参考图不能超过 10MB");
+      if (file.getSize() > MAX_REFERENCE_IMAGE_BYTES) {
+        throw AppException.badRequest("REFERENCE_IMAGE_TOO_LARGE", "单张参考图不能超过 50MB");
       }
     }
     return clean;
@@ -804,7 +806,7 @@ public class ImageService {
       return stream
         .filter(path -> path.getFileName().toString().matches("(?i).*\\.(png|jpe?g|webp)$"))
         .sorted()
-        .limit(3)
+        .limit(MAX_REFERENCE_IMAGES)
         .map(path -> {
           try {
             String extension = extension(path.getFileName().toString());
@@ -955,6 +957,12 @@ public class ImageService {
   private String extension(String filename) {
     if (filename == null || !filename.contains(".")) return "";
     return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
+  }
+
+  private boolean isSupportedReferenceImage(String mimetype, String filename) {
+    String mime = mimetype == null ? "" : mimetype.toLowerCase();
+    if (List.of("image/png", "image/jpeg", "image/jpg", "image/webp").contains(mime)) return true;
+    return List.of("png", "jpg", "jpeg", "webp").contains(extension(filename));
   }
 
   private String mimeForExtension(String extension) {

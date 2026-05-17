@@ -20,7 +20,7 @@ public class CreateImageRequest {
   @Size(max = 40)
   private String background;
   @Min(0)
-  @Max(3)
+  @Max(16)
   private Integer refs;
   @Min(1)
   @Max(4)

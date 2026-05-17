@@ -15,7 +15,7 @@ export class ImageController {
 
   @UseGuards(SessionGuard)
   @Post("generate")
-  @UseInterceptors(FilesInterceptor("image", 3, { limits: { fileSize: 10 * 1024 * 1024, files: 3 } }))
+  @UseInterceptors(FilesInterceptor("image[]", 16, { limits: { fileSize: 50 * 1024 * 1024, files: 16 } }))
   @HttpCode(HttpStatus.ACCEPTED)
   async generate(@Req() req: AuthedRequest, @Body() body: CreateImageDto, @UploadedFiles() files: UploadedImageFile[] = []) {
     const task = await this.imageService.createTask({ userId: req.user!.id, dto: body, referenceFiles: files });

@@ -64,6 +64,8 @@ const state = {
   lastCreatedCodes: [],
   callSquareConfig: { ...DEFAULT_CALL_SQUARE_CONFIG },
   callSquareConfigLoaded: false,
+  callSquareReferenceFiles: [],
+  callSquareReferenceUrls: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -194,11 +196,10 @@ class ApiError extends Error {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
+  const headers = options.body instanceof FormData
+    ? { ...(options.headers || {}) }
+    : { "Content-Type": "application/json", ...(options.headers || {}) };
+  const response = await fetch(path, { credentials: "same-origin", ...options, headers });
   const responseText = await response.text().catch(() => "");
   let payload = {};
   if (responseText) {
@@ -1477,7 +1478,12 @@ function renderCodes() {
       <td>${(code.usedBy || []).length}/${code.maxUses}</td>
       <td>${formatDate(code.expiresAt)}</td>
       <td>${statusBadge(code.active ? "enabled" : "disabled")}</td>
-      <td><button class="small ${code.active ? "danger" : ""}" data-action="toggle-code">${code.active ? "停用" : "启用"}</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="small ${code.active ? "danger" : ""}" data-action="toggle-code" type="button">${code.active ? "停用" : "启用"}</button>
+          ${(code.usedBy || []).length > 0 ? `<button class="small danger" data-action="delete-code" type="button">删除</button>` : ""}
+        </div>
+      </td>
     </tr>
   `).join("") || tableEmpty(7);
 }
@@ -1838,6 +1844,13 @@ function callSquareRequestUrl(rawUrl) {
   return String(rawUrl || "").trim();
 }
 
+function callSquareEditUrl(rawUrl) {
+  const url = callSquareRequestUrl(rawUrl);
+  if (url.includes("/images/edits")) return url;
+  if (url.includes("/images/generations")) return url.replace("/images/generations", "/images/edits");
+  return url;
+}
+
 function parseCallSquareRequestBody(raw) {
   const text = String(raw || "").trim();
   if (!text) throw new Error("请求参数 JSON 不能为空");
@@ -1878,6 +1891,82 @@ function callSquareFormData() {
     requestBody,
     timeoutMs: Number(data.timeoutMs || 90000),
   };
+}
+
+function callSquareTestPayload(data) {
+  if (!state.callSquareReferenceFiles.length) {
+    return { body: JSON.stringify(data) };
+  }
+  const body = new FormData();
+  Object.entries(data).forEach(([key, value]) => body.append(key, value == null ? "" : String(value)));
+  state.callSquareReferenceFiles.forEach((file) => body.append("image[]", file, file.name || "reference.png"));
+  return { body };
+}
+
+function revokeCallSquareReferenceUrls() {
+  state.callSquareReferenceUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.callSquareReferenceUrls = [];
+}
+
+function clearCallSquareReferences({ silent = false } = {}) {
+  revokeCallSquareReferenceUrls();
+  state.callSquareReferenceFiles = [];
+  const input = $("callSquareImages");
+  if (input) input.value = "";
+  renderCallSquareReferences();
+  if (!silent) toast("已清空参考图", "success");
+}
+
+function addCallSquareReferences(files) {
+  const incoming = Array.from(files || []);
+  if (!incoming.length) return;
+  const maxBytes = 50 * 1024 * 1024;
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+  const invalid = incoming.find((file) => !allowedTypes.has(String(file.type || "").toLowerCase()));
+  if (invalid) throw new Error("参考图仅支持 PNG、JPG、WEBP");
+  const oversized = incoming.filter((file) => file.size > maxBytes);
+  if (oversized.length) throw new Error(`图片过大（最大 50MB）：${oversized.map((file) => file.name).join("、")}`);
+  state.callSquareReferenceFiles = [...state.callSquareReferenceFiles, ...incoming].slice(0, 16);
+  const input = $("callSquareImages");
+  if (input) input.value = "";
+  renderCallSquareReferences();
+}
+
+function renderCallSquareReferences() {
+  const tray = $("callSquareReferenceTray");
+  if (!tray) return;
+  revokeCallSquareReferenceUrls();
+  tray.replaceChildren();
+  const files = state.callSquareReferenceFiles;
+  tray.classList.toggle("empty", !files.length);
+  $("callSquareClearReferences")?.classList.toggle("hidden", !files.length);
+  if (!files.length) {
+    const empty = document.createElement("span");
+    empty.textContent = "暂无参考图";
+    tray.appendChild(empty);
+    return;
+  }
+  files.forEach((file, index) => {
+    const url = URL.createObjectURL(file);
+    state.callSquareReferenceUrls.push(url);
+    const item = document.createElement("div");
+    item.className = "call-square-reference-item";
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = file.name || `参考图 ${index + 1}`;
+    const meta = document.createElement("span");
+    meta.textContent = String(index + 1);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.title = "移除参考图";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      state.callSquareReferenceFiles.splice(index, 1);
+      renderCallSquareReferences();
+    });
+    item.append(img, meta, remove);
+    tray.appendChild(item);
+  });
 }
 
 function applyCallSquareConfig(config = {}) {
@@ -1928,6 +2017,7 @@ function renderCallSquareResult(result) {
   const imageUrl = result.image?.url || "";
   const localStatus = result.localStatus || result.apiStatus || "";
   const errorText = [result.errorCode, result.error].filter(Boolean).join("：");
+  const modeText = result.mode === "edit" ? `参考图编辑 · ${Number(result.referenceCount || 0)} 张` : "文本生成";
   target.className = `call-square-result ${result.ok ? "ok" : "error"}`;
   target.innerHTML = `
     <div class="call-square-result-head">
@@ -1944,6 +2034,7 @@ function renderCallSquareResult(result) {
       <div><span>上游 HTTP</span><strong>${escapeHtml(result.status || 0)}</strong></div>
       <div><span>耗时</span><strong>${escapeHtml(formatLatency(result.latencyMs))}</strong></div>
       <div><span>尺寸</span><strong>${escapeHtml(result.size || "-")}</strong></div>
+      <div><span>模式</span><strong>${escapeHtml(modeText)}</strong></div>
     </div>
     <div class="call-square-detail">
       ${localStatus ? `<label>本机接口<input readonly value="${escapeHtml(localStatus)}" /></label>` : ""}
@@ -2360,7 +2451,7 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       if (isMaskedApiKey(submittedData.apiKey) && !state.callSquareConfig.apiKeyConfigured) {
         throw new Error("当前 API Key 是掩码值，但后台没有已保存的真实 Key，请重新填写完整 sk-...");
       }
-      const result = await api("/api/admin/call-square/test", { method: "POST", body: JSON.stringify(submittedData) });
+      const result = await api("/api/admin/call-square/test", { method: "POST", ...callSquareTestPayload(submittedData) });
       renderCallSquareResult(result);
       toast(result.ok ? "生成成功" : (result.error || "生成失败"), result.ok ? "success" : "error");
     });
@@ -2385,7 +2476,9 @@ $("callSquareForm").addEventListener("submit", async (event) => {
       image: null,
       errorCode: payload.errorCode || payload.error || "",
       error: payload.message || payload.error || error.message,
-      url: payload.url || callSquareRequestUrl(submittedData?.url || form.elements.url?.value || ""),
+      url: payload.url || (state.callSquareReferenceFiles.length ? callSquareEditUrl(submittedData?.url || form.elements.url?.value || "") : callSquareRequestUrl(submittedData?.url || form.elements.url?.value || "")),
+      mode: payload.mode || (state.callSquareReferenceFiles.length ? "edit" : "generation"),
+      referenceCount: payload.referenceCount ?? state.callSquareReferenceFiles.length,
       requestBody,
       rawPreview: payload.rawPreview || error.responseText || "",
     });
@@ -2403,8 +2496,23 @@ $("callSquareSaveConfig").addEventListener("click", async (event) => {
 
 $("callSquareClearConfig").addEventListener("click", () => {
   applyCallSquareConfig(DEFAULT_CALL_SQUARE_CONFIG);
+  clearCallSquareReferences({ silent: true });
   renderCallSquareResult(null);
   toast("已恢复默认测试参数", "success");
+});
+
+$("callSquareImages")?.addEventListener("change", (event) => {
+  try {
+    addCallSquareReferences(event.currentTarget.files);
+    toast(state.callSquareReferenceFiles.length ? `已添加 ${state.callSquareReferenceFiles.length} 张参考图` : "未选择参考图", "success");
+  } catch (error) {
+    event.currentTarget.value = "";
+    toast(error.message, "error");
+  }
+});
+
+$("callSquareClearReferences")?.addEventListener("click", () => {
+  clearCallSquareReferences();
 });
 
 $("userForm").addEventListener("submit", async (event) => {
@@ -2908,6 +3016,25 @@ $("codeRows").addEventListener("click", async (event) => {
       const code = state.codes.find((item) => item.id === id);
       await copyText(code?.code || "");
       toast("兑换码已复制", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest("button[data-action='delete-code']");
+  if (deleteButton) {
+    try {
+      const id = deleteButton.closest("tr").dataset.id;
+      const code = state.codes.find((item) => item.id === id);
+      const usedCount = (code?.usedBy || []).length;
+      if (!code || usedCount === 0) throw new Error("只能删除已经使用过的兑换码");
+      if (!window.confirm(`删除已使用兑换码 ${code.code}？历史兑换记录会保留。`)) return;
+      await withBusy(deleteButton, "删除中", () => api(`/api/admin/redemption-codes/${id}`, { method: "DELETE" }));
+      state.codes = state.codes.filter((item) => item.id !== id);
+      appendAuditLog("redemption_code.delete", id, { code: code.code, activityKey: code.activityKey, usedCount });
+      rerenderAfterMutation();
+      toast("已使用兑换码已删除", "success");
     } catch (error) {
       toast(error.message, "error");
     }

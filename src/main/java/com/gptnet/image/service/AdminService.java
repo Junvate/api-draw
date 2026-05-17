@@ -31,11 +31,14 @@ import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class AdminService {
   private static final int DEFAULT_REDEMPTION_CODE_LENGTH = 16;
   private static final int MAX_REDEMPTION_BATCH_SIZE = 500;
+  private static final int MAX_CALL_SQUARE_REFERENCE_IMAGES = 16;
+  private static final long MAX_CALL_SQUARE_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
   private static final String DEFAULT_CALL_SQUARE_URL = "https://api.superapi.me/v1/images/generations";
   private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
@@ -355,7 +358,7 @@ public class AdminService {
     return Maps.of("results", results);
   }
 
-  public Map<String, Object> callSquareTest(User actor, HttpServletRequest request, CallSquareTestRequest body) {
+  public Map<String, Object> callSquareTest(User actor, HttpServletRequest request, CallSquareTestRequest body, List<MultipartFile> files) {
     String baseUrl = firstNonBlank(body.getUrl(), body.getBaseUrl()).trim();
     String apiKey = Optional.ofNullable(body.getApiKey()).orElse("").trim();
     String requestUrl = baseUrl;
@@ -380,10 +383,15 @@ public class AdminService {
     String outputFormat = callSquareString(upstreamBody, "format", callSquareString(upstreamBody, "output_format", body.getOutputFormat()));
     if (prompt.length() > 8000) throw AppException.badRequest("PROMPT_TOO_LONG", "提示词不能超过 8000 个字");
     if (outputFormat.isBlank()) outputFormat = "png";
+    List<MultipartFile> referenceFiles = validateCallSquareReferenceFiles(files);
+    boolean hasReferences = !referenceFiles.isEmpty();
+    if (hasReferences) requestUrl = editsUrlForCallSquare(requestUrl);
 
     long started = System.currentTimeMillis();
     try {
-      var response = upstream.json(requestUrl, "POST", Map.of("Authorization", "Bearer " + apiKey), upstreamBody, timeoutMs);
+      var response = hasReferences
+        ? callSquareMultipart(requestUrl, apiKey, upstreamBody, referenceFiles, timeoutMs)
+        : upstream.json(requestUrl, "POST", Map.of("Authorization", "Bearer " + apiKey), upstreamBody, timeoutMs);
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
       Map<String, Object> image = firstImageResult(response.payload(), outputFormat);
       String error = response.ok() ? null : upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status());
@@ -403,6 +411,8 @@ public class AdminService {
         "prompt", prompt,
         "size", size,
         "quality", quality,
+        "mode", hasReferences ? "edit" : "generation",
+        "referenceCount", referenceFiles.size(),
         "requestBody", upstreamBody,
         "image", image,
         "errorCode", errorCode,
@@ -417,6 +427,8 @@ public class AdminService {
         "model", model,
         "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
+        "mode", hasReferences ? "edit" : "generation",
+        "referenceCount", referenceFiles.size(),
         "requestBodyPreview", truncate(jsonPreview(upstreamBody), 1200),
         "hasImage", image != null
       ));
@@ -434,6 +446,8 @@ public class AdminService {
         "model", model,
         "requestUrl", safeEndpointForAudit(requestUrl),
         "size", size,
+        "mode", hasReferences ? "edit" : "generation",
+        "referenceCount", referenceFiles.size(),
         "requestBodyPreview", truncate(jsonPreview(upstreamBody), 1200),
         "error", truncate(message, 500)
       ));
@@ -446,6 +460,8 @@ public class AdminService {
         "prompt", prompt,
         "size", size,
         "quality", quality,
+        "mode", hasReferences ? "edit" : "generation",
+        "referenceCount", referenceFiles.size(),
         "requestBody", upstreamBody,
         "image", null,
         "errorCode", errorCode,
@@ -822,6 +838,23 @@ public class AdminService {
     return Maps.of("code", record);
   }
 
+  @Transactional
+  public Map<String, Object> deleteCode(User actor, HttpServletRequest request, String id) {
+    RedemptionCode current = db.optional("SELECT * FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id), db.redemptionCodeMapper())
+      .orElseThrow(() -> AppException.notFound("兑换码不存在"));
+    int usedCount = current.usedBy().size();
+    if (usedCount == 0) {
+      throw AppException.badRequest("CODE_NOT_USED", "只能删除已经使用过的兑换码");
+    }
+    db.jdbc().update("DELETE FROM \"RedemptionCode\" WHERE \"id\" = :id", Map.of("id", id));
+    audit(actor, request, "redemption_code.delete", id, Maps.of(
+      "code", current.code(),
+      "activityKey", current.activityKey(),
+      "usedCount", usedCount
+    ));
+    return Maps.of("deleted", true, "id", id);
+  }
+
   private String normalizeActivityKey(String value, String fallback) {
     String raw = Optional.ofNullable(value).filter(s -> !s.isBlank()).orElse(fallback);
     return raw.trim().toUpperCase().replaceAll("[^A-Z0-9_-]", "-");
@@ -985,6 +1018,13 @@ public class AdminService {
     return value;
   }
 
+  private String editsUrlForCallSquare(String value) {
+    String url = Optional.ofNullable(value).orElse("").trim();
+    if (url.contains("/images/edits")) return url;
+    if (url.contains("/images/generations")) return url.replace("/images/generations", "/images/edits");
+    return url;
+  }
+
   private String safeEndpointForAudit(String value) {
     if (value == null) return "";
     int queryStart = value.indexOf('?');
@@ -1017,6 +1057,59 @@ public class AdminService {
     Object value = body.get(key);
     if (value == null) return Optional.ofNullable(fallback).orElse("").trim();
     return String.valueOf(value).trim();
+  }
+
+  private UpstreamClient.UpstreamResponse callSquareMultipart(
+    String requestUrl,
+    String apiKey,
+    Map<String, Object> upstreamBody,
+    List<MultipartFile> referenceFiles,
+    int timeoutMs
+  ) throws Exception {
+    List<UpstreamClient.Part> parts = new ArrayList<>();
+    for (Map.Entry<String, Object> entry : upstreamBody.entrySet()) {
+      Object value = entry.getValue();
+      if (value == null || "image".equals(entry.getKey())) continue;
+      parts.add(UpstreamClient.Part.text(entry.getKey(), multipartValue(value)));
+    }
+    for (MultipartFile file : referenceFiles) {
+      parts.add(UpstreamClient.Part.file(
+        "image[]",
+        file.getBytes(),
+        Optional.ofNullable(file.getOriginalFilename()).filter(s -> !s.isBlank()).orElse("reference.png"),
+        Optional.ofNullable(file.getContentType()).filter(s -> !s.isBlank()).orElse("image/png")
+      ));
+    }
+    return upstream.multipart(requestUrl, Map.of("Authorization", "Bearer " + apiKey), parts, timeoutMs);
+  }
+
+  private String multipartValue(Object value) throws Exception {
+    if (value instanceof String text) return text;
+    if (value instanceof Number || value instanceof Boolean) return String.valueOf(value);
+    return Json.MAPPER.writeValueAsString(value);
+  }
+
+  private List<MultipartFile> validateCallSquareReferenceFiles(List<MultipartFile> files) {
+    List<MultipartFile> clean = Optional.ofNullable(files).orElse(List.of()).stream()
+      .filter(file -> file != null && !file.isEmpty())
+      .toList();
+    if (clean.size() > MAX_CALL_SQUARE_REFERENCE_IMAGES) throw AppException.badRequest("TOO_MANY_REFERENCE_IMAGES", "参考图最多上传 16 张");
+    for (MultipartFile file : clean) {
+      if (!isSupportedCallSquareReferenceImage(file.getContentType(), file.getOriginalFilename())) {
+        throw AppException.badRequest("INVALID_REFERENCE_IMAGE", "参考图仅支持 PNG、JPG、WEBP");
+      }
+      if (file.getSize() > MAX_CALL_SQUARE_REFERENCE_IMAGE_BYTES) {
+        throw AppException.badRequest("REFERENCE_IMAGE_TOO_LARGE", "单张参考图不能超过 50MB");
+      }
+    }
+    return clean;
+  }
+
+  private boolean isSupportedCallSquareReferenceImage(String mimetype, String filename) {
+    String mime = Optional.ofNullable(mimetype).orElse("").toLowerCase();
+    if (List.of("image/png", "image/jpeg", "image/jpg", "image/webp").contains(mime)) return true;
+    String name = Optional.ofNullable(filename).orElse("").toLowerCase();
+    return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp");
   }
 
   private Map<String, Object> legacyCallSquareRequestBody(CallSquareTestRequest body) {

@@ -281,6 +281,7 @@ model UsageRecord {
 model RedemptionCode {
   id        String   @id @default(cuid())
   code      String   @unique
+  activityKey String
   credits   Int
   maxUses   Int
   usedBy    String[] @default([])
@@ -288,6 +289,25 @@ model RedemptionCode {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  uses RedemptionUse[]
+
+  @@index([activityKey])
+}
+
+model RedemptionUse {
+  id          String   @id @default(cuid())
+  codeId      String?
+  userId      String
+  activityKey String
+  createdAt   DateTime @default(now())
+
+  code RedemptionCode? @relation(fields: [codeId], references: [id], onDelete: SetNull)
+
+  @@unique([codeId, userId])
+  @@unique([activityKey, userId])
+  @@index([codeId])
+  @@index([userId, createdAt])
 }
 
 model AuditLog {

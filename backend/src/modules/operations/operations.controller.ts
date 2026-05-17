@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import { URL } from "node:url";
+import { Prisma } from "@prisma/client";
 import { Response } from "express";
 import { Queue } from "bullmq";
 import { InjectQueue } from "@nestjs/bullmq";
@@ -235,6 +236,16 @@ export class OperationsController {
         record.usedBy.length >= record.maxUses
       ) {
         throw new BadRequestException({ error: "CODE_USED", message: "兑换码不可用" });
+      }
+      try {
+        await tx.redemptionUse.create({
+          data: { codeId: record.id, userId: req.user!.id, activityKey: record.activityKey },
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          throw new BadRequestException({ error: "ACTIVITY_ALREADY_REDEEMED", message: "你已经兑换过该活动积分码" });
+        }
+        throw error;
       }
       await tx.redemptionCode.update({ where: { id: record.id }, data: { usedBy: [...record.usedBy, req.user!.id] } });
       await tx.walletEntry.create({ data: { userId: req.user!.id, amount: record.credits, reason: "redeem_code", refId: record.id, actorId: req.user!.id } });

@@ -41,6 +41,10 @@ export class AdminController {
     return code || null;
   }
 
+  private normalizeActivityKey(value: string | undefined, fallback: string) {
+    return String(value || fallback).trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "-") || fallback;
+  }
+
   private async uniqueRedemptionCode() {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const code = this.randomRedemptionCode();
@@ -412,9 +416,11 @@ export class AdminController {
     }
     const codes = [];
     for (let index = 0; index < batchCount; index += 1) {
+      const code = manualCode || await this.uniqueRedemptionCode();
       codes.push(await this.prisma.redemptionCode.create({
         data: {
-          code: manualCode || await this.uniqueRedemptionCode(),
+          code,
+          activityKey: this.normalizeActivityKey(body.activityKey, code),
           credits: body.credits ?? 100,
           maxUses: body.maxUses ?? 1,
           usedBy: [],
@@ -429,9 +435,15 @@ export class AdminController {
 
   @Patch("redemption-codes/:id")
   async patchCode(@Req() req: AuthedRequest, @Param("id") id: string, @Body() body: PatchRedemptionCodeDto) {
+    const current = await this.prisma.redemptionCode.findUniqueOrThrow({ where: { id } });
+    const activityKey = body.activityKey ? this.normalizeActivityKey(body.activityKey, current.activityKey) : undefined;
+    if (activityKey && activityKey !== current.activityKey && current.usedBy.length > 0) {
+      throw new BadRequestException({ error: "CODE_ALREADY_USED", message: "兑换码已有使用记录，不能修改活动标识" });
+    }
     const code = await this.prisma.redemptionCode.update({
       where: { id },
       data: {
+        activityKey,
         credits: body.credits,
         maxUses: body.maxUses,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
@@ -440,6 +452,18 @@ export class AdminController {
     });
     await this.audit(req, "redemption_code.update", id, body);
     return { code };
+  }
+
+  @Delete("redemption-codes/:id")
+  async deleteCode(@Req() req: AuthedRequest, @Param("id") id: string) {
+    const code = await this.prisma.redemptionCode.findUniqueOrThrow({ where: { id } });
+    const usedCount = code.usedBy.length;
+    if (usedCount === 0) {
+      throw new BadRequestException({ error: "CODE_NOT_USED", message: "只能删除已经使用过的兑换码" });
+    }
+    await this.prisma.redemptionCode.delete({ where: { id } });
+    await this.audit(req, "redemption_code.delete", id, { code: code.code, activityKey: code.activityKey, usedCount });
+    return { deleted: true, id };
   }
 
   private async audit(req: AuthedRequest, action: string, targetId?: string, meta?: unknown) {
