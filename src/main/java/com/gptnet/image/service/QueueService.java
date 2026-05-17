@@ -46,7 +46,7 @@ public class QueueService {
     StringRedisTemplate redis,
     Db db,
     @Value("${REDIS_KEY_PREFIX:draw:}") String keyPrefix,
-    @Value("${IMAGE_WORKER_CONCURRENCY:200}") int concurrency,
+    @Value("${IMAGE_WORKER_CONCURRENCY:${GATEWAY_CONCURRENCY:200}}") int concurrency,
     @Value("${IMAGE_JOB_ATTEMPTS:3}") int attempts,
     @Value("${IMAGE_JOB_BACKOFF_MS:5000}") long backoffMs,
     @Value("${IMAGE_WORKER_ENABLED:true}") boolean workerEnabled,
@@ -143,6 +143,10 @@ public class QueueService {
     long dead = len("image:dead");
     long recovered = value("image:recovered");
     return new QueueStats(waiting, active, completed, failed, delayed, dead, recovered);
+  }
+
+  public int concurrency() {
+    return concurrency;
   }
 
   private void workerLoop() {

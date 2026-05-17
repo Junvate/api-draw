@@ -100,7 +100,7 @@ public class OperationsController {
       ),
       "gateway", Maps.of(
         "distributed", true,
-        "concurrency", integerEnv("IMAGE_WORKER_CONCURRENCY", 200),
+        "concurrency", queue.concurrency(),
         "active", counts.active(),
         "queued", counts.waiting() + counts.delayed(),
         "recentErrors24h", recentErrors
