@@ -74,6 +74,12 @@ public class AdminController {
     return admin.patchUser(actor, request, id, body);
   }
 
+  @DeleteMapping("/users/{id}")
+  public Map<String, Object> deleteUser(HttpServletRequest request, @PathVariable String id) {
+    User actor = requireAdmin(request);
+    return admin.deleteUser(actor, request, id);
+  }
+
   @PostMapping("/credits")
   public Map<String, Object> credits(HttpServletRequest request, @Valid @RequestBody CreditsRequest body) {
     User actor = requireAdmin(request);

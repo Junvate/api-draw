@@ -2454,6 +2454,49 @@ input.is-dirty, select.is-dirty {
   background: #fff7ed;
 }
 
+.danger-zone {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.delete-confirm-box {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.delete-confirm-box p {
+  margin: 0 0 10px;
+  color: var(--red-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.delete-impact-grid {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.delete-confirm-label {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: var(--red-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.delete-confirm-label input {
+  border-color: #fecaca;
+  background: #fff;
+}
+
+.delete-confirm-label input:focus {
+  outline: none;
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, .12);
+}
+
 /* Drawer preview */
 .drawer-preview-card {
   overflow: hidden;

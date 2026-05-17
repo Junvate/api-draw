@@ -1674,6 +1674,11 @@ function showUserDetail(id) {
         </div>
       </div>
     </div>
+    <div class="detail-section danger-zone">
+      <h3>危险操作</h3>
+      <p class="drawer-helper">删除用户会移除该账号、API Key、任务、图片结果、积分流水和兑换记录。此操作不可恢复。</p>
+      <button class="drawer-action danger" type="button" data-drawer-action="delete-user" data-user-id="${escapeHtml(user.id)}">删除用户</button>
+    </div>
   `);
 }
 
@@ -1695,6 +1700,28 @@ function showUserWarningForm(id) {
         <div class="drawer-credit-actions">
           <button class="primary" id="drawerWarningSubmit" type="button" data-user-id="${escapeHtml(user.id)}">发送警告</button>
         </div>
+      </div>
+    </div>
+  `);
+}
+
+function showUserDeleteConfirm(id) {
+  const user = state.users.find((item) => item.id === id);
+  if (!user) return;
+  const jobs = state.jobs.filter((job) => job.userId === user.id);
+  openDrawer("确认删除用户", user.email, `
+    <div class="detail-section delete-confirm-box">
+      <h3>二次确认</h3>
+      <p>请输入该用户邮箱以确认删除。删除后该账号、API Key、任务、图片结果、积分流水、兑换记录和未确认警告都会被移除。</p>
+      <div class="delete-impact-grid">
+        ${fieldRow("用户", user.email)}
+        ${fieldRow("任务", jobs.length)}
+        ${fieldRow("积分余额", Number(user.credits || 0))}
+        ${fieldRow("待确认警告", userWarnings(user).length)}
+      </div>
+      <label class="delete-confirm-label">确认邮箱<input id="drawerDeleteUserEmail" autocomplete="off" placeholder="${escapeHtml(user.email)}" /></label>
+      <div class="drawer-credit-actions">
+        <button class="danger" id="drawerDeleteUserSubmit" type="button" data-user-id="${escapeHtml(user.id)}" data-user-email="${escapeHtml(user.email)}" disabled>确认删除</button>
       </div>
     </div>
   `);
@@ -2697,6 +2724,7 @@ $("userRows").addEventListener("click", async (event) => {
             <button class="drawer-action" type="button" data-drawer-action="detail-user" data-user-id="${escapeHtml(user.id)}">查看详情</button>
             <button class="drawer-action" type="button" data-drawer-action="credit-user" data-user-id="${escapeHtml(user.id)}">调整积分</button>
             <button class="drawer-action" type="button" data-drawer-action="warn-user" data-user-id="${escapeHtml(user.id)}">发送风险警告</button>
+            <button class="drawer-action danger" type="button" data-drawer-action="delete-user" data-user-id="${escapeHtml(user.id)}">删除用户</button>
           </div>
         </div>
       `);
@@ -2719,8 +2747,16 @@ $("userRows").addEventListener("click", async (event) => {
   }
 });
 
+$("drawerBody").addEventListener("input", (event) => {
+  const input = event.target.closest("#drawerDeleteUserEmail");
+  if (!input) return;
+  const button = $("drawerDeleteUserSubmit");
+  if (!button) return;
+  button.disabled = input.value.trim() !== button.dataset.userEmail;
+});
+
 $("drawerBody").addEventListener("click", async (event) => {
-  const drawerButton = event.target.closest("[data-drawer-action], #drawerCreditSubmit, #drawerWarningSubmit");
+  const drawerButton = event.target.closest("[data-drawer-action], #drawerCreditSubmit, #drawerWarningSubmit, #drawerDeleteUserSubmit");
   if (!drawerButton) return;
   try {
     const gatewayId = drawerButton.dataset.gatewayId;
@@ -2805,6 +2841,26 @@ $("drawerBody").addEventListener("click", async (event) => {
       return;
     }
 
+    if (drawerButton.id === "drawerDeleteUserSubmit") {
+      const userId = drawerButton.dataset.userId;
+      const expectedEmail = drawerButton.dataset.userEmail || "";
+      const typedEmail = $("drawerDeleteUserEmail")?.value.trim() || "";
+      if (typedEmail !== expectedEmail) throw new Error("请输入完整用户邮箱以确认删除");
+      await withBusy(drawerButton, "删除中", () => api(`/api/admin/users/${userId}`, { method: "DELETE" }));
+      const deletedUser = state.users.find((item) => item.id === userId);
+      state.users = state.users.filter((item) => item.id !== userId);
+      state.jobs = state.jobs.filter((job) => job.userId !== userId);
+      state.gallery.images = (state.gallery.images || []).filter((image) => image.userId !== userId);
+      state.riskAlerts = state.riskAlerts.filter((alert) => alert.userId !== userId);
+      state.selected.users.delete(userId);
+      clearRowDraft("users", userId);
+      appendAuditLog("user.delete", userId, { email: deletedUser?.email });
+      await loadAll().catch(() => rerenderAfterMutation());
+      closeDrawer();
+      toast("用户已删除", "success");
+      return;
+    }
+
     const action = drawerButton.dataset.drawerAction;
     const userId = drawerButton.dataset.userId;
     if (!userId) return;
@@ -2821,6 +2877,11 @@ $("drawerBody").addEventListener("click", async (event) => {
 
     if (action === "warn-user") {
       showUserWarningForm(userId);
+      return;
+    }
+
+    if (action === "delete-user") {
+      showUserDeleteConfirm(userId);
       return;
     }
 

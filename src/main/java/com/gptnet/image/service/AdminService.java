@@ -216,6 +216,30 @@ public class AdminService {
   }
 
   @Transactional
+  public Map<String, Object> deleteUser(User actor, HttpServletRequest request, String id) {
+    User current = db.userById(id).orElseThrow(() -> AppException.notFound("用户不存在"));
+    if (actor.id().equals(id)) throw AppException.badRequest("SELF_DELETE", "不能删除当前登录管理员");
+    if ("admin".equals(current.role())) {
+      Integer activeAdminCount = db.jdbc().queryForObject("""
+        SELECT count(*) FROM "User" WHERE "role" = 'admin'::"UserRole" AND "status" = 'active'::"UserStatus"
+        """, Map.of(), Integer.class);
+      if ("active".equals(current.status()) && activeAdminCount != null && activeAdminCount <= 1) {
+        throw AppException.badRequest("LAST_ADMIN", "至少保留一个可用管理员账号");
+      }
+    }
+    Map<String, Object> meta = userDeleteMeta(id);
+    audit(actor, request, "user.delete", id, Maps.of(
+      "email", current.email(),
+      "name", current.name(),
+      "role", current.role(),
+      "status", current.status(),
+      "removed", meta
+    ));
+    deleteUserRows(id);
+    return Maps.of("deleted", true, "id", id, "removed", meta);
+  }
+
+  @Transactional
   public Map<String, Object> credits(User actor, HttpServletRequest request, CreditsRequest body) {
     if (body.getUserId() == null || body.getAmount() == null) {
       throw AppException.badRequest("VALIDATION_FAILED", "用户和积分不能为空");
@@ -1368,6 +1392,56 @@ public class AdminService {
     String sql = "SELECT count(*) FROM \"" + table + "\"" + (where == null ? "" : " WHERE " + where);
     Integer value = db.jdbc().queryForObject(sql, Map.of(), Integer.class);
     return value == null ? 0 : value;
+  }
+
+  private Map<String, Object> userDeleteMeta(String userId) {
+    Integer imageTasks = db.jdbc().queryForObject("SELECT count(*) FROM \"ImageTask\" WHERE \"userId\" = :userId", Map.of("userId", userId), Integer.class);
+    Integer imageResults = db.jdbc().queryForObject("""
+      SELECT count(*)
+      FROM "ImageResult" r
+      JOIN "ImageTask" t ON t."id" = r."taskId"
+      WHERE t."userId" = :userId
+      """, Map.of("userId", userId), Integer.class);
+    return Maps.of(
+      "imageTasks", imageTasks == null ? 0 : imageTasks,
+      "imageResults", imageResults == null ? 0 : imageResults,
+      "apiKeys", scalarCount("ApiKey", "\"userId\" = :userId", userId),
+      "walletEntries", scalarCount("WalletEntry", "\"userId\" = :userId", userId),
+      "orders", scalarCount("Order", "\"userId\" = :userId", userId),
+      "subscriptions", scalarCount("Subscription", "\"userId\" = :userId", userId),
+      "usageRecords", scalarCount("UsageRecord", "\"userId\" = :userId OR \"apiKeyId\" IN (SELECT \"id\" FROM \"ApiKey\" WHERE \"userId\" = :userId)", userId),
+      "redemptionUses", scalarCount("RedemptionUse", "\"userId\" = :userId", userId),
+      "riskAlerts", scalarCount("RiskAlert", "\"userId\" = :userId", userId),
+      "warnings", scalarCount("UserWarning", "\"userId\" = :userId", userId)
+    );
+  }
+
+  private int scalarCount(String table, String where, String userId) {
+    Integer value = db.jdbc().queryForObject("SELECT count(*) FROM \"" + table + "\" WHERE " + where, Map.of("userId", userId), Integer.class);
+    return value == null ? 0 : value;
+  }
+
+  private void deleteUserRows(String userId) {
+    Map<String, String> params = Map.of("userId", userId);
+    db.jdbc().update("""
+      DELETE FROM "ImageResult"
+      WHERE "taskId" IN (SELECT "id" FROM "ImageTask" WHERE "userId" = :userId)
+      """, params);
+    db.jdbc().update("DELETE FROM \"UsageRecord\" WHERE \"userId\" = :userId OR \"apiKeyId\" IN (SELECT \"id\" FROM \"ApiKey\" WHERE \"userId\" = :userId)", params);
+    db.jdbc().update("UPDATE \"WalletEntry\" SET \"actorId\" = NULL WHERE \"actorId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"WalletEntry\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("UPDATE \"RedemptionCode\" SET \"usedBy\" = array_remove(\"usedBy\", :userId), \"updatedAt\" = now() WHERE :userId = ANY(\"usedBy\")", params);
+    db.jdbc().update("DELETE FROM \"RedemptionUse\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"RiskAlert\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("UPDATE \"UserWarning\" SET \"actorId\" = NULL WHERE \"actorId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"UserWarning\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("UPDATE \"SensitiveWordRule\" SET \"createdBy\" = NULL WHERE \"createdBy\" = :userId", params);
+    db.jdbc().update("UPDATE \"AuditLog\" SET \"actorId\" = NULL WHERE \"actorId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"ImageTask\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"ApiKey\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"Order\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"Subscription\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"User\" WHERE \"id\" = :userId", params);
   }
 
   private String truncate(String value, int max) {
