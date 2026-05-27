@@ -526,8 +526,17 @@ a { color: inherit; }
   padding: 0 6px;
 }
 
+.history-panel-body .job-progress strong,
+.history-panel-body .job-progress span {
+  padding: 0;
+}
+
 .history-panel-body .job-item strong { padding-top: 5px; }
 .history-panel-body .job-item small  { padding-bottom: 5px; }
+
+.history-panel-body .job-progress {
+  margin: 2px 6px 6px;
+}
 
 /* composer-scroll wraps everything except prompt-actions */
 .composer-scroll {
@@ -1327,6 +1336,84 @@ button.result-link {
 .result-placeholder small { font-size: 12px; }
 .result-card[data-status="failed"] .result-caption strong { color: var(--red); }
 
+.placeholder-progress,
+.stage-progress-meter,
+.job-progress {
+  --progress-color: var(--accent-2);
+  --progress-bg: rgba(13,138,106,.13);
+}
+
+.placeholder-progress.failed,
+.stage-progress-meter.failed,
+.job-progress.failed {
+  --progress-color: var(--red);
+  --progress-bg: rgba(192,57,43,.13);
+}
+
+.placeholder-progress.succeeded,
+.stage-progress-meter.succeeded,
+.job-progress.succeeded {
+  --progress-color: var(--accent);
+  --progress-bg: rgba(26,111,196,.13);
+}
+
+.placeholder-progress {
+  width: min(280px, 100%);
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.placeholder-progress-head,
+.stage-progress-meter-head,
+.job-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.placeholder-progress-head span,
+.stage-progress-meter-head span,
+.job-progress-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.placeholder-progress-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.placeholder-progress-head strong {
+  font-size: 12px;
+  color: var(--progress-color);
+  letter-spacing: 0;
+}
+
+.placeholder-progress-track,
+.stage-progress-meter-track,
+.job-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--progress-bg);
+}
+
+.placeholder-progress-track i,
+.stage-progress-meter-track i,
+.job-progress-track i {
+  display: block;
+  height: 100%;
+  min-width: 5px;
+  border-radius: inherit;
+  background: var(--progress-color);
+  transition: width .45s cubic-bezier(.25,.8,.25,1);
+}
+
 .gen-progress-wrap {
   width: 220px; max-width: 100%;
   height: 6px;
@@ -1511,6 +1598,28 @@ button.gateway-item:hover { border-color: #b0bdd0; background: #fff; color: var(
   object-fit: contain;
   background: #f8fafc;
   box-sizing: border-box;
+}
+
+.job-progress {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.job-progress-head {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.job-progress-head strong {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--progress-color);
+}
+
+.job-progress-track {
+  height: 4px;
 }
 
 .admin-summary {
@@ -2039,6 +2148,38 @@ button.is-loading { position: relative; cursor: wait; }
 }
 .has-stage-thumbs .stage-actions { right: 114px; }
 
+.stage-progress {
+  position: absolute;
+  left: 28px;
+  bottom: 22px;
+  z-index: 5;
+  width: min(320px, calc(100% - 56px));
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.94);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
+
+.stage-progress.hidden { display: none; }
+
+.stage-progress-meter {
+  display: grid;
+  gap: 6px;
+}
+
+.stage-progress-meter-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stage-progress-meter-head strong {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--progress-color);
+}
+
 .stage-thumbs {
   position: absolute;
   top: 28px;
@@ -2089,9 +2230,9 @@ button.is-loading { position: relative; cursor: wait; }
 
 @media (max-width: 700px) {
   .canvas-stage.has-stage-thumbs .stage-result-image {
-    inset: 20px 20px 152px;
+    inset: 20px 20px 196px;
     width: calc(100% - 40px);
-    height: calc(100% - 172px);
+    height: calc(100% - 216px);
   }
   .canvas-stage.has-stage-thumbs .stage-actions,
   .stage-actions {
@@ -2099,6 +2240,13 @@ button.is-loading { position: relative; cursor: wait; }
     right: 20px;
     bottom: 16px;
     max-width: calc(100% - 40px);
+  }
+  .stage-progress {
+    left: 20px;
+    right: 20px;
+    bottom: 148px;
+    width: auto;
+    max-width: none;
   }
   .stage-thumbs {
     top: auto;

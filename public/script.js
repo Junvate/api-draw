@@ -79,6 +79,7 @@ const stageActions = $("stageActions");
 const stageEdit = $("stageEdit");
 const stageOpen = $("stageOpen");
 const stageDownload = $("stageDownload");
+const stageProgress = $("stageProgress");
 const canvasStage = $("canvasStage");
 const imageUpload = $("imageUpload");
 const referenceTray = $("referenceTray");
@@ -545,17 +546,73 @@ function formatResultHeadline(status) {
   }[status] || "结果预览";
 }
 
+function getJobProgress(job) {
+  const requestedRaw = Number(job?.imageCount ?? job?.image_count ?? 0);
+  const returnedRaw = Number(job?.returnedCount ?? job?.returned_count ?? normalizeResultImages(job).length);
+  const requested = Number.isFinite(requestedRaw) && requestedRaw > 0 ? Math.trunc(requestedRaw) : 1;
+  const returned = Number.isFinite(returnedRaw) && returnedRaw > 0 ? Math.min(Math.trunc(returnedRaw), requested) : 0;
+  const percent = requested > 0 ? Math.round((returned / requested) * 100) : 0;
+  return { requested, returned, percent };
+}
+
+function progressText(job) {
+  const progress = getJobProgress(job);
+  if (progress.requested <= 1) return "";
+  if (job?.status === "failed") return `已完成 ${progress.returned}/${progress.requested}，任务失败`;
+  if (job?.status === "succeeded" && progress.returned < progress.requested) return `已完成 ${progress.returned}/${progress.requested}，未补齐`;
+  if (job?.status === "succeeded") return `已完成 ${progress.returned}/${progress.requested}`;
+  if (progress.returned > 0) return `已完成 ${progress.returned}/${progress.requested}，继续生成中`;
+  if (job?.status === "queued") return `等待生成 0/${progress.requested}`;
+  return `正在生成 0/${progress.requested}`;
+}
+
+function progressTone(job) {
+  if (job?.status === "failed") return "failed";
+  const progress = getJobProgress(job);
+  if (job?.status === "succeeded" && progress.returned < progress.requested) return "failed";
+  if (job?.status === "succeeded") return "succeeded";
+  return "active";
+}
+
+function createProgressMeter(job, className = "image-progress") {
+  const progress = getJobProgress(job);
+  if (progress.requested <= 1) return null;
+  const root = document.createElement("div");
+  root.className = `${className} ${progressTone(job)}`;
+  root.setAttribute("role", "status");
+  root.setAttribute("aria-label", progressText(job));
+
+  const head = document.createElement("div");
+  head.className = `${className}-head`;
+
+  const label = document.createElement("span");
+  label.textContent = progressText(job);
+
+  const count = document.createElement("strong");
+  count.textContent = `${progress.returned}/${progress.requested}`;
+
+  head.append(label, count);
+
+  const track = document.createElement("div");
+  track.className = `${className}-track`;
+  const bar = document.createElement("i");
+  bar.style.width = `${progress.percent}%`;
+  track.appendChild(bar);
+
+  root.append(head, track);
+  return root;
+}
+
 function formatResultMessage(job) {
   if (!job) return "提交任务后，生成结果会显示在这里。";
-  const requested = Number(job.imageCount ?? job.image_count ?? 0);
-  const returned = Number(job.returnedCount ?? job.returned_count ?? normalizeResultImages(job).length);
+  const { requested, returned } = getJobProgress(job);
   if (job.status === "queued") return "系统已保存这次创作请求，正在等待可用通道处理。";
   if (job.status === "running" || job.status === "processing") {
-    if (requested > 1 && returned > 0) return `已生成 ${returned}/${requested} 张，剩余图片继续生成中。`;
+    if (requested > 1 && returned > 0) return `已完成 ${returned}/${requested} 张，剩余图片继续生成中。`;
     return "图像正在生成中，通常几秒内会返回结果。";
   }
   if (job.status === "failed") return job.error || "这次生成未成功完成，建议调整提示词后重试。";
-  if (requested > 1 && returned > 0 && returned < requested) return `已生成 ${returned}/${requested} 张，未返回的图片已自动退回积分。`;
+  if (requested > 1 && returned > 0 && returned < requested) return `已完成 ${returned}/${requested} 张，未返回的图片已自动退回积分。`;
   return job.prompt ? clipText(job.prompt, 96) : "已根据当前提示词生成预览图。";
 }
 
@@ -598,7 +655,10 @@ function createResultPlaceholder(job) {
 
   wrapper.append(badge, spinner, title, message);
 
-  if (isPendingStatus(job.status)) {
+  const progressMeter = createProgressMeter(job, "placeholder-progress");
+  if (progressMeter) wrapper.appendChild(progressMeter);
+
+  if (isPendingStatus(job.status) && !progressMeter) {
     const progressWrap = document.createElement("div");
     progressWrap.className = "gen-progress-wrap";
     const progressBar = document.createElement("div");
@@ -687,11 +747,29 @@ function renderResultCard(job, { silent = false } = {}) {
   }
 
   renderStageThumbs(job, images, activeIndex);
+  renderStageProgress(job, Boolean(resultUrl));
 
   resultTitle.textContent = formatResultHeadline(job?.status);
   resultPrompt.textContent = formatResultMessage(job);
   updateResultActions(originalUrl || resultUrl, downloadUrl, Boolean(job?.resultUrl || job?.result_url || originalUrl), canEdit);
   if (!silent) showToast("预览已更新");
+}
+
+function renderStageProgress(job, visible = true) {
+  if (!stageProgress) return;
+  stageProgress.replaceChildren();
+  if (!visible) {
+    stageProgress.classList.add("hidden");
+    return;
+  }
+  const meter = createProgressMeter(job, "stage-progress-meter");
+  if (!meter) {
+    stageProgress.classList.add("hidden");
+    return;
+  }
+  stageProgress.className = `stage-progress ${progressTone(job)}`;
+  stageProgress.appendChild(meter);
+  stageProgress.classList.remove("hidden");
 }
 
 function renderStageThumbs(job, images, activeIndex) {
@@ -749,6 +827,8 @@ function resetResultStage() {
   resultCard.dataset.status = "idle";
   resultArt.replaceChildren();
   canvasStage.classList.remove("has-stage-thumbs");
+  stageProgress?.classList.add("hidden");
+  stageProgress?.replaceChildren();
   if (stageThumbs) {
     stageThumbs.classList.add("hidden");
     stageThumbs.replaceChildren();
@@ -815,6 +895,9 @@ function renderJobs(jobs) {
     meta.textContent = `${job.model} · ${job.costCredits} 积分 · ${new Date(job.createdAt).toLocaleString()}${owner && !job.ownedByMe ? ` · ${owner}` : ""}`;
 
     button.append(title, meta);
+
+    const progressMeter = createProgressMeter(job, "job-progress");
+    if (progressMeter) button.appendChild(progressMeter);
 
     if (job.status === "failed" && job.error) {
       const hint = document.createElement("small");
