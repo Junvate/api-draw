@@ -60,7 +60,7 @@ const $ = (id) => document.getElementById(id);
 const modelOptions = document.querySelectorAll(".model-option");
 const ratioOptions = document.querySelectorAll(".tile");
 const qualityOptions = document.querySelectorAll("#qualityOptions .quality");
-const countOptions = document.querySelectorAll("#countOptions .quality");
+const countOptions = document.querySelectorAll("#countOptions button.quality");
 const switcherButtons = document.querySelectorAll(".switcher button");
 const promptForm = $("promptForm");
 const promptInput = $("promptInput");
@@ -98,6 +98,7 @@ const promptCounter = $("promptCounter");
 const composerToggle = $("composerToggle");
 const composerRail = $("composerRail");
 const creationLayout = promptForm;
+const MAX_GENERATION_COUNT = 20;
 
 async function api(path, options = {}) {
   const headers = options.headers === undefined
@@ -128,7 +129,13 @@ function money(cents) {
 
 function estimateCost() {
   const unit = state.quality === "超清(4k)" ? 8 : 6;
-  return unit * (state.count || 1);
+  return unit * normalizeCount(state.count);
+}
+
+function normalizeCount(value) {
+  const count = Number.parseInt(value, 10);
+  if (!Number.isFinite(count) || count < 1) return 1;
+  return Math.min(count, MAX_GENERATION_COUNT);
 }
 
 function isPendingStatus(status) {
@@ -354,7 +361,7 @@ function createGeneratePayload(prompt) {
     model: state.model,
     ratio: state.ratio,
     quality: state.quality,
-    count: state.count,
+    count: normalizeCount(state.count),
     refs: state.refs,
     response_mode: "async",
   };
@@ -376,6 +383,7 @@ function persistWorkspaceState() {
       prompt: promptInput.value,
       ratio: state.ratio,
       quality: state.quality,
+      count: normalizeCount(state.count),
       model: state.model,
       subtitle: state.subtitle,
       type: state.type,
@@ -402,6 +410,19 @@ function restoreWorkspaceState() {
     if (qualityButton) {
       setActive(qualityOptions, qualityButton, { animate: false });
       state.quality = qualityButton.dataset.value;
+    }
+
+    if (draft.count !== undefined) {
+      const restoredCount = normalizeCount(draft.count);
+      state.count = restoredCount;
+      const countButton = Array.from(countOptions).find((button) => Number.parseInt(button.dataset.value, 10) === restoredCount);
+      if (countButton) {
+        setActive(countOptions, countButton, { animate: false });
+        $("countCustom").value = "";
+      } else {
+        countOptions.forEach((button) => button.classList.remove("active"));
+        $("countCustom").value = String(restoredCount);
+      }
     }
 
     const modelButton = Array.from(modelOptions).find((button) => button.dataset.model === draft.model);
@@ -1146,10 +1167,12 @@ countOptions.forEach((button) => {
 });
 
 $("countCustom").addEventListener("input", () => {
-  const v = parseInt($("countCustom").value, 10);
+  const input = $("countCustom");
+  const v = parseInt(input.value, 10);
   if (v >= 1) {
     countOptions.forEach(b => b.classList.remove("active"));
-    state.count = Math.min(v, 20);
+    state.count = normalizeCount(v);
+    if (v !== state.count) input.value = String(state.count);
     updateTask();
     persistWorkspaceState();
   }

@@ -74,11 +74,12 @@ public class PublicApiController {
     @RequestParam(value = "output_format", required = false) String outputFormat,
     @RequestParam(required = false) String background,
     @RequestParam(required = false) Integer refs,
+    @RequestParam(required = false) Integer count,
     @RequestParam(value = "response_mode", required = false) String responseMode,
     @RequestPart(value = "image", required = false) List<MultipartFile> files,
     @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
-    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, responseMode);
+    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, count, responseMode);
     return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
@@ -95,11 +96,12 @@ public class PublicApiController {
     @RequestParam(value = "output_format", required = false) String outputFormat,
     @RequestParam(required = false) String background,
     @RequestParam(required = false) Integer refs,
+    @RequestParam(required = false) Integer count,
     @RequestParam(value = "response_mode", required = false) String responseMode,
     @RequestPart(value = "image", required = false) List<MultipartFile> files,
     @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
-    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, responseMode);
+    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, count, responseMode);
     return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
@@ -142,7 +144,7 @@ public class PublicApiController {
     return Maps.of("object", "image_generation.response", "data", imageService.publicTask(returned, context.user().id(), sync));
   }
 
-  private CreateImageRequest multipartBody(String prompt, String model, String ratio, String size, String quality, String outputFormat, String background, Integer refs, String responseMode) {
+  private CreateImageRequest multipartBody(String prompt, String model, String ratio, String size, String quality, String outputFormat, String background, Integer refs, Integer count, String responseMode) {
     CreateImageRequest body = new CreateImageRequest();
     body.setPrompt(prompt);
     body.setModel(model);
@@ -152,6 +154,7 @@ public class PublicApiController {
     body.setOutput_format(outputFormat);
     body.setBackground(background);
     body.setRefs(refs);
+    body.setCount(count);
     body.setResponse_mode(responseMode);
     return body;
   }

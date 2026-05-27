@@ -23,7 +23,7 @@ public class CreateImageRequest {
   @Max(16)
   private Integer refs;
   @Min(1)
-  @Max(4)
+  @Max(20)
   private Integer count;
   private String response_mode;
 

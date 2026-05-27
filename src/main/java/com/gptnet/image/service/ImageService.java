@@ -35,6 +35,7 @@ import org.slf4j.LoggerFactory;
 public class ImageService {
   private static final Logger log = LoggerFactory.getLogger(ImageService.class);
   private static final int MAX_REFERENCE_IMAGES = 16;
+  private static final int MAX_IMAGES_PER_REQUEST = 20;
   private static final long MAX_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
   private final Db db;
   private final SecurityService security;
@@ -121,7 +122,7 @@ public class ImageService {
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);
     Gateway gateway = selectGateway(requestedModel, normalizedSize);
     int unitCost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
-    int imageCount = Math.max(1, Math.min(4, params.dto().getCount() == null ? 1 : params.dto().getCount()));
+    int imageCount = normalizeImageCount(params.dto().getCount());
     int cost = unitCost * imageCount;
     List<MultipartFile> referenceFiles = validateReferenceFiles(params.referenceFiles());
     String taskId = db.id();
@@ -216,10 +217,21 @@ public class ImageService {
       """, Map.of("id", task.id()));
     if (claimed == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
     try {
+      int existingCount = db.resultsForTask(task.id()).size();
+      if (existingCount >= task.imageCount()) {
+        int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
+        return completeTaskSuccess(task, gateway, new GenerationRun(List.of(), null), latencyMs, existingCount, 0, task.costCredits());
+      }
       GenerationRun run = callGateway(task, gateway);
       int latencyMs = Math.toIntExact(Math.min(Integer.MAX_VALUE, System.currentTimeMillis() - started));
-      int returnedCount = run.results().size();
+      int returnedCount = db.resultsForTask(task.id()).size();
       if (returnedCount == 0) throw run.lastError() == null ? new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", 0, true) : run.lastError();
+      if (returnedCount < task.imageCount() && attempt < maxAttempts) {
+        return requeuePartialTask(task, run, returnedCount, attempt);
+      }
+      if (returnedCount < task.imageCount()) {
+        throw new UpstreamException("UPSTREAM_PARTIAL_RESULT", partialResultMessage(task.imageCount(), returnedCount, run.lastError()), 0, true);
+      }
       int shortfall = Math.max(0, task.imageCount() - returnedCount);
       int unitCost = task.imageCount() > 0 ? task.costCredits() / task.imageCount() : task.costCredits();
       int refundAmount = shortfall > 0 ? unitCost * shortfall : 0;
@@ -275,6 +287,25 @@ public class ImageService {
 
   public ImageTask failTask(ImageTask task, String code, String message, boolean refund) {
     return transactions.execute(status -> failTaskInTransaction(task, code, message, refund));
+  }
+
+  private ImageTask requeuePartialTask(ImageTask task, GenerationRun run, int returnedCount, int attempt) {
+    String message = partialResultMessage(task.imageCount(), returnedCount, run.lastError());
+    int updated = db.jdbc().update("""
+      UPDATE "ImageTask" SET
+        "status" = 'queued'::"ImageTaskStatus",
+        "retryCount" = :retryCount,
+        "errorCode" = :code,
+        "errorMessage" = :message,
+        "updatedAt" = now()
+      WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
+      """, new MapSqlParameterSource()
+      .addValue("id", task.id())
+      .addValue("retryCount", attempt)
+      .addValue("code", "PARTIAL_RESULT_RETRYING")
+      .addValue("message", truncate(message, 1000)));
+    if (updated == 0) return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
+    return db.imageTaskById(task.id()).map(db::hydrateTask).orElse(task);
   }
 
   private ImageTask completeTaskSuccess(ImageTask task, Gateway gateway, GenerationRun run, int latencyMs, int returnedCount, int refundAmount, int finalCost) {
@@ -503,13 +534,16 @@ public class ImageService {
   private GenerationRun callGateway(ImageTask task, Gateway gateway) throws Exception {
     String apiKey = resolveGatewayApiKey(gateway);
     List<LoadedReferenceImage> referenceImages = loadReferenceImages(task.id());
-    int count = Math.max(1, task.imageCount());
+    int existingCount = db.resultsForTask(task.id()).size();
+    int count = Math.max(0, task.imageCount() - existingCount);
+    if (count == 0) return new GenerationRun(List.of(), null);
     ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     try {
       List<CompletableFuture<ImageAttempt>> futures = new ArrayList<>();
       for (int index = 0; index < count; index += 1) {
-        int variantIndex = index;
-        futures.add(CompletableFuture.supplyAsync(() -> callGatewayImage(task, gateway, apiKey, referenceImages, count, variantIndex), pool));
+        int attemptIndex = index;
+        int variantIndex = existingCount + index;
+        futures.add(CompletableFuture.supplyAsync(() -> callGatewayImage(task, gateway, apiKey, referenceImages, count, attemptIndex, variantIndex), pool));
       }
       List<GatewayResult> results = new ArrayList<>();
       UpstreamException lastError = null;
@@ -524,24 +558,24 @@ public class ImageService {
     }
   }
 
-  private ImageAttempt callGatewayImage(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int count, int index) {
+  private ImageAttempt callGatewayImage(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int count, int attemptIndex, int variantIndex) {
     try {
       GatewayResult result = referenceImages.isEmpty()
-        ? callGatewayGeneration(task, gateway, apiKey, 1, index)
-        : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, index);
+        ? callGatewayGeneration(task, gateway, apiKey, 1, variantIndex)
+        : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, variantIndex);
       persistGatewayResult(task, result);
       db.jdbc().update("""
         UPDATE "ImageTask" SET "updatedAt" = now()
         WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
         """, Map.of("id", task.id()));
-      return new ImageAttempt(index, result, null);
+      return new ImageAttempt(variantIndex, result, null);
     } catch (Exception exception) {
       if (storageException(exception) != null) throw new RuntimeException(exception);
       UpstreamException error = upstreamException(exception);
       if (error == null) error = new UpstreamException("UPSTREAM_FAILED", exception.getMessage(), 0, true);
       log.warn("[task={}] Gateway image {}/{} failed gateway={} code={} message={}",
-        task.id(), index + 1, count, gateway.name(), error.code(), error.getMessage());
-      return new ImageAttempt(index, null, error);
+        task.id(), attemptIndex + 1, count, gateway.name(), error.code(), error.getMessage());
+      return new ImageAttempt(variantIndex, null, error);
     }
   }
 
@@ -929,6 +963,18 @@ public class ImageService {
     if ("processing".equals(status)) return "running";
     if ("success".equals(status)) return "succeeded";
     return status;
+  }
+
+  private int normalizeImageCount(Integer value) {
+    int count = value == null ? 1 : value;
+    return Math.max(1, Math.min(MAX_IMAGES_PER_REQUEST, count));
+  }
+
+  private String partialResultMessage(int requestedCount, int returnedCount, UpstreamException lastError) {
+    String suffix = lastError == null || lastError.getMessage() == null || lastError.getMessage().isBlank()
+      ? ""
+      : "：" + lastError.getMessage();
+    return "图像网关只返回 " + returnedCount + "/" + requestedCount + " 张，正在重试补齐" + suffix;
   }
 
   private String cleanFormString(String value) {
