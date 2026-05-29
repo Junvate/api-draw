@@ -9,6 +9,8 @@ public class CreateImageRequest {
   private String prompt;
   @Size(max = 120)
   private String model;
+  @Size(max = 120)
+  private String gatewayId;
   @Size(max = 40)
   private String ratio;
   @Size(max = 40)
@@ -31,6 +33,8 @@ public class CreateImageRequest {
   public void setPrompt(String prompt) { this.prompt = prompt; }
   public String getModel() { return model; }
   public void setModel(String model) { this.model = model; }
+  public String getGatewayId() { return gatewayId; }
+  public void setGatewayId(String gatewayId) { this.gatewayId = gatewayId; }
   public String getRatio() { return ratio; }
   public void setRatio(String ratio) { this.ratio = ratio; }
   public String getSize() { return size; }

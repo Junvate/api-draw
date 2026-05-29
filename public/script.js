@@ -10,6 +10,8 @@ const POLL_INTERVALS = [1200, 1600, 2200, 2800, 3600, 5000];
 const state = {
   user: null,
   settings: {},
+  gateways: [],
+  gatewayId: null,
   model: "gpt-image-2",
   subtitle: "gpt-image-2",
   type: "图像",
@@ -57,7 +59,8 @@ const prompts = [
 ];
 
 const $ = (id) => document.getElementById(id);
-const modelOptions = document.querySelectorAll(".model-option");
+const modelOptionsContainer = $("modelOptions");
+let modelOptions = document.querySelectorAll(".model-option");
 const ratioOptions = document.querySelectorAll(".tile");
 const qualityOptions = document.querySelectorAll("#qualityOptions .quality");
 const countOptions = document.querySelectorAll("#countOptions button.quality");
@@ -137,6 +140,111 @@ function normalizeCount(value) {
   const count = Number.parseInt(value, 10);
   if (!Number.isFinite(count) || count < 1) return 1;
   return Math.min(count, MAX_GENERATION_COUNT);
+}
+
+function gatewayProviderLabel(provider) {
+  if (provider === "fal") return "fal.ai";
+  if (provider === "openai") return "OpenAI 兼容";
+  return provider || "上游渠道";
+}
+
+function gatewayDisplayName(gateway) {
+  const name = String(gateway?.name || "").trim();
+  if (name) return name;
+  return gateway?.provider === "fal" ? "fal.ai GPT Image 2" : "GPT Image 2";
+}
+
+function gatewaySubtitle(gateway) {
+  const model = String(gateway?.model || "gpt-image-2").trim();
+  return `${gatewayProviderLabel(gateway?.provider)} · ${model}`;
+}
+
+function createGatewayOption(gateway) {
+  const button = document.createElement("button");
+  button.className = "model-option primary-model";
+  button.type = "button";
+  button.dataset.gatewayId = gateway.id || "";
+  button.dataset.model = gateway.model || "gpt-image-2";
+  button.dataset.subtitle = gatewaySubtitle(gateway);
+  button.dataset.provider = gateway.provider || "openai";
+
+  const icon = document.createElement("span");
+  icon.className = "picture-icon";
+
+  const copy = document.createElement("span");
+  const title = document.createElement("strong");
+  title.textContent = gatewayDisplayName(gateway);
+  const subtitle = document.createElement("small");
+  subtitle.textContent = button.dataset.subtitle;
+  copy.append(title, subtitle);
+
+  const cost = document.createElement("em");
+  const star = document.createElement("span");
+  star.className = "credit-star";
+  star.setAttribute("aria-hidden", "true");
+  cost.append(star, document.createTextNode(`${Number(gateway.costCredits || 8)} 积分`));
+
+  button.append(icon, copy, cost);
+  return button;
+}
+
+function fallbackGateways() {
+  return [{
+    id: "",
+    name: "GPT Image 2",
+    provider: "openai",
+    model: "gpt-image-2",
+    costCredits: 8,
+  }];
+}
+
+function createEmptyGatewayOption() {
+  const button = document.createElement("button");
+  button.className = "model-option primary-model";
+  button.type = "button";
+  button.disabled = true;
+  button.innerHTML = `
+    <span class="picture-icon"></span>
+    <span>
+      <strong>暂无可用渠道</strong>
+      <small>请联系管理员检查渠道权限或上游 Key</small>
+    </span>
+    <em>不可用</em>
+  `;
+  return button;
+}
+
+function selectModelOption(button, { animate = true, persist = true } = {}) {
+  if (!button) return;
+  if (button.disabled) return;
+  setActive(modelOptions, button, { animate });
+  state.gatewayId = button.dataset.gatewayId || null;
+  state.model = button.dataset.model || "gpt-image-2";
+  state.subtitle = button.dataset.subtitle || state.model;
+  state.type = button.classList.contains("video") ? "视频" : "图像";
+  updateTask();
+  if (persist) persistWorkspaceState();
+}
+
+function renderModelOptions(gateways = state.gateways) {
+  const options = Array.isArray(gateways) && gateways.length ? gateways : (state.user ? [] : fallbackGateways());
+  modelOptionsContainer.replaceChildren();
+  if (!options.length) {
+    modelOptionsContainer.appendChild(createEmptyGatewayOption());
+    modelOptions = document.querySelectorAll(".model-option");
+    state.gatewayId = null;
+    state.model = "gpt-image-2";
+    state.subtitle = "暂无可用渠道";
+    updateTask();
+    return;
+  }
+  options.forEach((gateway) => modelOptionsContainer.appendChild(createGatewayOption(gateway)));
+  modelOptions = document.querySelectorAll(".model-option");
+  const preferredGatewayId = state.gatewayId || (state.user ? modelOptions[0]?.dataset.gatewayId : "");
+  const selected = Array.from(modelOptions).find((button) => preferredGatewayId && button.dataset.gatewayId === preferredGatewayId)
+    || Array.from(modelOptions).find((button) => !state.gatewayId && button.dataset.model === state.model)
+    || modelOptions[0];
+  selectModelOption(selected, { animate: false, persist: false });
 }
 
 function isPendingStatus(status) {
@@ -366,6 +474,7 @@ function createGeneratePayload(prompt) {
     refs: state.refs,
     response_mode: "async",
   };
+  if (state.gatewayId) payload.gatewayId = state.gatewayId;
   if (!state.referenceFiles.length) {
     return {
       body: JSON.stringify(payload),
@@ -385,6 +494,7 @@ function persistWorkspaceState() {
       ratio: state.ratio,
       quality: state.quality,
       count: normalizeCount(state.count),
+      gatewayId: state.gatewayId,
       model: state.model,
       subtitle: state.subtitle,
       type: state.type,
@@ -426,12 +536,11 @@ function restoreWorkspaceState() {
       }
     }
 
-    const modelButton = Array.from(modelOptions).find((button) => button.dataset.model === draft.model);
+    if (draft.gatewayId !== undefined) state.gatewayId = draft.gatewayId || null;
+    const modelButton = Array.from(modelOptions).find((button) => draft.gatewayId && button.dataset.gatewayId === draft.gatewayId)
+      || Array.from(modelOptions).find((button) => !draft.gatewayId && button.dataset.model === draft.model);
     if (modelButton) {
-      setActive(modelOptions, modelButton, { animate: false });
-      state.model = modelButton.dataset.model;
-      state.subtitle = modelButton.dataset.subtitle || state.subtitle;
-      state.type = modelButton.classList.contains("video") ? "视频" : "图像";
+      selectModelOption(modelButton, { animate: false, persist: false });
     }
 
     setComposerCollapsed(Boolean(draft.composerCollapsed));
@@ -1015,16 +1124,19 @@ async function refreshMe({ throwOnError = false } = {}) {
     if (!user) {
       updateAccount(null);
       renderJobs([]);
+      await loadGateways({ silent: true });
       resetResultStage();
       return null;
     }
     updateAccount(user);
+    await loadGateways({ silent: true });
     showAccountWarningIfNeeded(user);
     if (user?.role === "admin") await loadAdmin({ silent: true });
     return user;
   } catch {
     updateAccount(null);
     renderJobs([]);
+    await loadGateways({ silent: true });
     resetResultStage();
     if (throwOnError) throw new Error("账号信息刷新失败");
     return null;
@@ -1050,6 +1162,25 @@ async function refreshJobs({ silent = false, throwOnError = false } = {}) {
 async function fetchJob(taskId) {
   const { job } = await api(`/api/jobs/${taskId}`);
   return job;
+}
+
+async function loadGateways({ silent = false } = {}) {
+  if (!state.user) {
+    state.gateways = [];
+    state.gatewayId = null;
+    renderModelOptions([]);
+    return [];
+  }
+  try {
+    const { gateways } = await api(`/api/gateways?t=${Date.now()}`);
+    state.gateways = gateways || [];
+    renderModelOptions(state.gateways);
+    return state.gateways;
+  } catch (error) {
+    renderModelOptions(state.gateways);
+    if (!silent) showToast(error.message, "error");
+    return state.gateways;
+  }
 }
 
 async function loadAdmin({ silent = false } = {}) {
@@ -1083,6 +1214,7 @@ async function loginOrRegister(path) {
   }
   const { user } = await api(path, { method: "POST", body: JSON.stringify(payload) });
   updateAccount(user);
+  await loadGateways({ silent: true });
   authDialog.close();
   showAccountWarningIfNeeded(user);
   showToast(isRegister ? "注册成功，已发放新用户积分" : "登录成功");
@@ -1197,15 +1329,9 @@ async function pollActiveJob() {
   }
 }
 
-modelOptions.forEach((button) => {
-  button.addEventListener("click", () => {
-    setActive(modelOptions, button);
-    state.model = button.dataset.model;
-    state.subtitle = button.dataset.subtitle;
-    state.type = button.classList.contains("video") ? "视频" : "图像";
-    updateTask();
-    persistWorkspaceState();
-  });
+modelOptionsContainer.addEventListener("click", (event) => {
+  const button = event.target.closest(".model-option");
+  if (button && modelOptionsContainer.contains(button)) selectModelOption(button);
 });
 
 function enforceQualityRatioCompat() {
@@ -1305,6 +1431,7 @@ promptInput.addEventListener("keydown", (event) => {
 promptForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.user) return openAuthDialog("请先登录后再生成图片");
+  if (!state.gatewayId) return showToast("当前账号没有可用渠道，请联系管理员检查渠道权限", "error");
   const prompt = promptInput.value.trim();
   if (prompt.length < 4) {
     promptInput.focus();
@@ -1313,9 +1440,9 @@ promptForm.addEventListener("submit", async (event) => {
 
   const button = promptForm.querySelector(".generate-button");
   setButtonLoading(button, true, "提交中");
-  showToast("任务已提交，正在进入生成队列");
 
   try {
+    showToast("任务已提交，正在进入生成队列");
     const payload = createGeneratePayload(prompt);
     const { job, credits } = await api("/api/generate", { method: "POST", ...payload });
 
@@ -1436,6 +1563,7 @@ $("logoutButton").addEventListener("click", async () => {
   try {
     await api("/api/auth/logout", { method: "POST" });
     updateAccount(null);
+    await loadGateways({ silent: true });
     renderJobs([]);
     resetResultStage();
     showToast("已退出登录");

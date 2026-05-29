@@ -118,7 +118,7 @@ public class ImageService {
     String requestedModel = Optional.of(cleanFormString(params.dto().getModel())).filter(s -> !s.isBlank()).orElse("gpt-image-2");
     String requestedQuality = cleanFormString(params.dto().getQuality());
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);
-    Gateway gateway = selectGateway(requestedModel, normalizedSize, params.userId());
+    Gateway gateway = selectGateway(requestedModel, normalizedSize, params.userId(), cleanFormString(params.dto().getGatewayId()));
     int unitCost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
     int imageCount = normalizeImageCount(params.dto().getCount());
     int cost = unitCost * imageCount;
@@ -480,6 +480,19 @@ public class ImageService {
   }
 
   public Gateway selectGateway(String model, String size, String userId) {
+    return selectGateway(model, size, userId, null);
+  }
+
+  public Gateway selectGateway(String model, String size, String userId, String requestedGatewayId) {
+    String gatewayId = Optional.ofNullable(requestedGatewayId).orElse("").trim();
+    if (!gatewayId.isBlank()) {
+      return db.enabledGatewaysForUser(userId).stream()
+        .filter(item -> item.id().equals(gatewayId))
+        .filter(item -> resolveGatewayApiKey(item, false) != null)
+        .filter(item -> !isCooling(item))
+        .findFirst()
+        .orElseThrow(() -> AppException.forbidden("GATEWAY_NOT_AVAILABLE", "所选渠道不可用或当前账号无权限"));
+    }
     String preferredGroup = groupForSize(size);
     List<Gateway> all = db.enabledGatewaysForModel(model, userId).stream()
       .filter(item -> resolveGatewayApiKey(item, false) != null)
@@ -489,6 +502,22 @@ public class ImageService {
     return all.stream().filter(item -> groupMatches(item.upstreamGroup(), preferredGroup)).findFirst()
       .or(() -> all.stream().findFirst())
       .orElseThrow(() -> AppException.unavailable("NO_AVAILABLE_GATEWAY", "没有可用渠道，请稍后重试"));
+  }
+
+  public List<Map<String, Object>> availableGatewaysForUser(String userId) {
+    return db.enabledGatewaysForUser(userId).stream()
+      .filter(item -> resolveGatewayApiKey(item, false) != null)
+      .filter(item -> !isCooling(item))
+      .map(item -> Maps.of(
+        "id", item.id(),
+        "name", item.name(),
+        "provider", item.provider(),
+        "model", item.model(),
+        "costCredits", item.costCredits(),
+        "priority", item.priority(),
+        "upstreamGroup", item.upstreamGroup()
+      ))
+      .toList();
   }
 
   private Optional<Gateway> activeGatewayForTask(ImageTask task) {

@@ -68,6 +68,7 @@ public class PublicApiController {
     @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
     @RequestParam String prompt,
     @RequestParam(required = false) String model,
+    @RequestParam(required = false) String gatewayId,
     @RequestParam(required = false) String ratio,
     @RequestParam(required = false) String size,
     @RequestParam(required = false) String quality,
@@ -79,7 +80,7 @@ public class PublicApiController {
     @RequestPart(value = "image", required = false) List<MultipartFile> files,
     @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
-    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, count, responseMode);
+    CreateImageRequest body = multipartBody(prompt, model, gatewayId, ratio, size, quality, outputFormat, background, refs, count, responseMode);
     return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
@@ -90,6 +91,7 @@ public class PublicApiController {
     @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
     @RequestParam String prompt,
     @RequestParam(required = false) String model,
+    @RequestParam(required = false) String gatewayId,
     @RequestParam(required = false) String ratio,
     @RequestParam(required = false) String size,
     @RequestParam(required = false) String quality,
@@ -101,7 +103,7 @@ public class PublicApiController {
     @RequestPart(value = "image", required = false) List<MultipartFile> files,
     @RequestPart(value = "image[]", required = false) List<MultipartFile> imageArrayFiles
   ) {
-    CreateImageRequest body = multipartBody(prompt, model, ratio, size, quality, outputFormat, background, refs, count, responseMode);
+    CreateImageRequest body = multipartBody(prompt, model, gatewayId, ratio, size, quality, outputFormat, background, refs, count, responseMode);
     return createInternal(request, idempotencyKey, body, mergeFiles(files, imageArrayFiles));
   }
 
@@ -144,10 +146,11 @@ public class PublicApiController {
     return Maps.of("object", "image_generation.response", "data", imageService.publicTask(returned, context.user().id(), sync));
   }
 
-  private CreateImageRequest multipartBody(String prompt, String model, String ratio, String size, String quality, String outputFormat, String background, Integer refs, Integer count, String responseMode) {
+  private CreateImageRequest multipartBody(String prompt, String model, String gatewayId, String ratio, String size, String quality, String outputFormat, String background, Integer refs, Integer count, String responseMode) {
     CreateImageRequest body = new CreateImageRequest();
     body.setPrompt(prompt);
     body.setModel(model);
+    body.setGatewayId(gatewayId);
     body.setRatio(ratio);
     body.setSize(size);
     body.setQuality(quality);

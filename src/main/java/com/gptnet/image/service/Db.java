@@ -93,6 +93,26 @@ public class Db {
     return gateways;
   }
 
+  public List<Gateway> enabledGatewaysForUser(String userId) {
+    return jdbc.query("""
+      SELECT g.*, COALESCE(array_agg(a."userId" ORDER BY u."email") FILTER (WHERE a."userId" IS NOT NULL), ARRAY[]::TEXT[]) AS "exclusiveUserIds"
+      FROM "Gateway" g
+      LEFT JOIN "GatewayUserAccess" a ON a."gatewayId" = g."id"
+      LEFT JOIN "User" u ON u."id" = a."userId"
+      WHERE g."enabled" = true
+        AND (
+          NOT EXISTS (SELECT 1 FROM "GatewayUserAccess" any_access WHERE any_access."gatewayId" = g."id")
+          OR EXISTS (
+            SELECT 1 FROM "GatewayUserAccess" own_access
+            WHERE own_access."gatewayId" = g."id"
+              AND own_access."userId" = :userId
+          )
+        )
+      GROUP BY g."id"
+      ORDER BY g."priority" DESC, g."name" ASC
+      """, Map.of("userId", userId), gatewayMapper());
+  }
+
   public Optional<ImageTask> imageTaskById(String id) {
     return optional("SELECT * FROM \"ImageTask\" WHERE \"id\" = :id", Map.of("id", id), imageTaskMapper());
   }
