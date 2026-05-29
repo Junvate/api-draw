@@ -3,6 +3,10 @@ WORKDIR /app
 COPY pom.xml ./
 RUN mvn -q -DskipTests dependency:go-offline
 COPY src ./src
+RUN if grep -n 'CREATE TYPE "GatewayProvider" AS ENUM.*fal' src/main/resources/db/migration/V1__init.sql; then \
+      echo "ERROR: Do not edit applied migration V1__init.sql to include fal. Add provider enum values in a new migration instead."; \
+      exit 1; \
+    fi
 RUN mvn -q -DskipTests package
 
 FROM eclipse-temurin:21-jre-alpine-3.22 AS runner
