@@ -8,7 +8,7 @@ DO $$ BEGIN
   CREATE TYPE "ApiKeyStatus" AS ENUM ('active', 'revoked');
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 DO $$ BEGIN
-  CREATE TYPE "GatewayProvider" AS ENUM ('openai', 'fal');
+  CREATE TYPE "GatewayProvider" AS ENUM ('openai');
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 DO $$ BEGIN
   CREATE TYPE "GatewayHealth" AS ENUM ('unknown', 'healthy', 'degraded', 'down');
