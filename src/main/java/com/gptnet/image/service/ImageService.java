@@ -562,9 +562,6 @@ public class ImageService {
   private GenerationRun callGateway(ImageTask task, Gateway gateway) throws Exception {
     String apiKey = resolveGatewayApiKey(gateway);
     List<LoadedReferenceImage> referenceImages = loadReferenceImages(task.id());
-    if ("fal".equals(gateway.provider()) && !referenceImages.isEmpty()) {
-      throw AppException.badRequest("FAL_REFERENCE_IMAGE_UNSUPPORTED", "fal.ai 渠道暂不支持参考图编辑，请使用纯文本生成或 OpenAI 兼容渠道");
-    }
     int existingCount = db.resultsForTask(task.id()).size();
     int count = Math.max(0, task.imageCount() - existingCount);
     if (count == 0) return new GenerationRun(List.of(), null);
@@ -743,6 +740,41 @@ public class ImageService {
     return new GatewayResult(first, task.outputFormat(), null, null, null, null, null, extras);
   }
 
+  private GatewayResult callFalGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n) {
+    String url = upstreamUrl(gateway.baseUrl(), falEditPathForGateway(gateway));
+    Map<String, Object> body = Maps.of(
+      "prompt", task.prompt(),
+      "image_urls", falImageDataUris(referenceImages),
+      "image_size", falImageSize(task.size()),
+      "quality", falQuality(task.quality()),
+      "num_images", n,
+      "output_format", falOutputFormat(task.outputFormat())
+    );
+    UpstreamClient.UpstreamResponse submit = upstream.json(url, "POST",
+      Map.of("Authorization", "Key " + apiKey), body, gateway.timeoutMs());
+    UpstreamClient.UpstreamResponse response = submit;
+    String responseUrl = stringValue(submit.payload().get("response_url"));
+    String statusUrl = stringValue(submit.payload().get("status_url"));
+    if (responseUrl != null
+      && !responseUrl.isBlank()
+      && falImages(submit.payload(), n).isEmpty()
+      && (submit.ok() || isFalStillInProgress(submit))) {
+      response = pollFalResult(responseUrl, statusUrl, apiKey, gateway.timeoutMs());
+    }
+    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "fal.ai 编辑返回 HTTP " + response.status())).withDebug(url, response.text());
+    List<Map<String, Object>> images = falImages(response.payload(), n);
+    if (images.isEmpty()) {
+      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "fal.ai 没有返回编辑图片结果", response.status(), true).withDebug(url, response.text());
+    }
+    List<ExtraImage> extras = images.stream().skip(1)
+      .map(this::falImageUrl)
+      .filter(item -> item != null && !item.isBlank())
+      .map(item -> new ExtraImage(item, null, null, null))
+      .toList();
+    String first = falImageUrl(images.get(0));
+    return new GatewayResult(first, task.outputFormat(), null, null, null, null, null, extras);
+  }
+
   private UpstreamClient.UpstreamResponse pollFalResult(String responseUrl, String statusUrl, String apiKey, int timeoutMs) {
     long deadline = System.currentTimeMillis() + Math.max(1000, timeoutMs);
     UpstreamClient.UpstreamResponse last = null;
@@ -877,6 +909,7 @@ public class ImageService {
   }
 
   private GatewayResult callGatewayEdit(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int n, int variantIndex) {
+    if ("fal".equals(gateway.provider())) return callFalGatewayEdit(task, gateway, apiKey, referenceImages, n);
     String editPath = editPathForGateway(gateway);
     String upstreamGroup = Optional.ofNullable(gateway.upstreamGroup()).filter(s -> !s.isBlank()).orElse(groupForSize(task.size()));
     List<Part> parts = new ArrayList<>();
@@ -1142,6 +1175,21 @@ public class ImageService {
     if (path.contains("/images/edits")) return path;
     if (path.contains("/images/generations")) return path.replace("/images/generations", "/images/edits");
     return "/images/edits";
+  }
+
+  private String falEditPathForGateway(Gateway gateway) {
+    String path = Optional.ofNullable(gateway.generationPath())
+      .filter(value -> !value.isBlank())
+      .orElse("/openai/gpt-image-2")
+      .trim();
+    if (path.endsWith("/edit")) return path;
+    return path.replaceAll("/$", "") + "/edit";
+  }
+
+  private List<String> falImageDataUris(List<LoadedReferenceImage> images) {
+    return images.stream()
+      .map(image -> "data:" + image.contentType() + ";base64," + Base64.getEncoder().encodeToString(image.bytes()))
+      .toList();
   }
 
   private String normalizeSize(String rawValue, String quality) {
