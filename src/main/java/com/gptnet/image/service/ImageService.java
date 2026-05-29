@@ -722,8 +722,12 @@ public class ImageService {
       Map.of("Authorization", "Key " + apiKey), body, gateway.timeoutMs());
     UpstreamClient.UpstreamResponse response = submit;
     String responseUrl = stringValue(submit.payload().get("response_url"));
-    if (submit.ok() && responseUrl != null && !responseUrl.isBlank() && falImages(submit.payload(), n).isEmpty()) {
-      response = pollFalResult(responseUrl, apiKey, gateway.timeoutMs());
+    String statusUrl = stringValue(submit.payload().get("status_url"));
+    if (responseUrl != null
+      && !responseUrl.isBlank()
+      && falImages(submit.payload(), n).isEmpty()
+      && (submit.ok() || isFalStillInProgress(submit))) {
+      response = pollFalResult(responseUrl, statusUrl, apiKey, gateway.timeoutMs());
     }
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "fal.ai 返回 HTTP " + response.status())).withDebug(url, response.text());
     List<Map<String, Object>> images = falImages(response.payload(), n);
@@ -739,18 +743,59 @@ public class ImageService {
     return new GatewayResult(first, task.outputFormat(), null, null, null, null, null, extras);
   }
 
-  private UpstreamClient.UpstreamResponse pollFalResult(String responseUrl, String apiKey, int timeoutMs) {
+  private UpstreamClient.UpstreamResponse pollFalResult(String responseUrl, String statusUrl, String apiKey, int timeoutMs) {
     long deadline = System.currentTimeMillis() + Math.max(1000, timeoutMs);
     UpstreamClient.UpstreamResponse last = null;
     while (System.currentTimeMillis() < deadline) {
-      last = upstream.json(responseUrl, "GET", Map.of("Authorization", "Key " + apiKey), null, Math.max(1000, Math.min(30000, timeoutMs)));
-      if (!last.ok()) return last;
+      String checkUrl = Optional.ofNullable(statusUrl).filter(s -> !s.isBlank()).orElse(responseUrl);
+      last = upstream.json(checkUrl, "GET", Map.of("Authorization", "Key " + apiKey), null, Math.max(1000, Math.min(30000, timeoutMs)));
+      if (!last.ok()) {
+        if (isFalStillInProgress(last)) {
+          sleepBeforeFalPoll(deadline);
+          continue;
+        }
+        return last;
+      }
       if (!falImages(last.payload(), MAX_IMAGES_PER_REQUEST).isEmpty()) return last;
-      String status = Optional.ofNullable(stringValue(last.payload().get("status"))).orElse("").toUpperCase();
-      if (List.of("FAILED", "ERROR", "CANCELLED").contains(status)) return last;
+      String status = falStatus(last.payload());
+      if (isFalTerminalFailure(status)) return last;
+      if (isFalCompleted(status) || statusUrl == null || statusUrl.isBlank()) {
+        last = upstream.json(responseUrl, "GET", Map.of("Authorization", "Key " + apiKey), null, Math.max(1000, Math.min(30000, timeoutMs)));
+        if (!last.ok()) {
+          if (isFalStillInProgress(last)) {
+            sleepBeforeFalPoll(deadline);
+            continue;
+          }
+          return last;
+        }
+        if (!falImages(last.payload(), MAX_IMAGES_PER_REQUEST).isEmpty()) return last;
+        status = falStatus(last.payload());
+        if (isFalTerminalFailure(status)) return last;
+      }
       sleepBeforeFalPoll(deadline);
     }
     throw new UpstreamException("UPSTREAM_TIMEOUT", "fal.ai 队列等待超时", 0, true).withDebug(responseUrl, last == null ? null : last.text());
+  }
+
+  private String falStatus(Map<String, Object> payload) {
+    return Optional.ofNullable(stringValue(payload.get("status"))).orElse("").trim().toUpperCase();
+  }
+
+  private boolean isFalCompleted(String status) {
+    return "COMPLETED".equals(status) || "DONE".equals(status) || "SUCCESS".equals(status);
+  }
+
+  private boolean isFalTerminalFailure(String status) {
+    return List.of("FAILED", "ERROR", "CANCELLED", "CANCELED").contains(status);
+  }
+
+  private boolean isFalStillInProgress(UpstreamClient.UpstreamResponse response) {
+    String detail = Optional.ofNullable(stringValue(response.payload().get("detail"))).orElse("").toLowerCase();
+    String message = Optional.ofNullable(stringValue(response.payload().get("message"))).orElse("").toLowerCase();
+    String status = falStatus(response.payload());
+    return detail.contains("still in progress")
+      || message.contains("still in progress")
+      || List.of("IN_QUEUE", "IN_PROGRESS", "RUNNING", "PROCESSING").contains(status);
   }
 
   private void sleepBeforeFalPoll(long deadline) {
