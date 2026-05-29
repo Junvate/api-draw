@@ -48,20 +48,46 @@ public class Db {
   }
 
   public Optional<Gateway> gatewayById(String id) {
-    return optional("SELECT * FROM \"Gateway\" WHERE \"id\" = :id", Map.of("id", id), gatewayMapper());
+    return optional("""
+      SELECT g.*, COALESCE(array_agg(a."userId" ORDER BY u."email") FILTER (WHERE a."userId" IS NOT NULL), ARRAY[]::TEXT[]) AS "exclusiveUserIds"
+      FROM "Gateway" g
+      LEFT JOIN "GatewayUserAccess" a ON a."gatewayId" = g."id"
+      LEFT JOIN "User" u ON u."id" = a."userId"
+      WHERE g."id" = :id
+      GROUP BY g."id"
+      """, Map.of("id", id), gatewayMapper());
   }
 
   public List<Gateway> gateways() {
-    return jdbc.query("SELECT * FROM \"Gateway\" ORDER BY \"priority\" DESC", Map.of(), gatewayMapper());
+    return jdbc.query("""
+      SELECT g.*, COALESCE(array_agg(a."userId" ORDER BY u."email") FILTER (WHERE a."userId" IS NOT NULL), ARRAY[]::TEXT[]) AS "exclusiveUserIds"
+      FROM "Gateway" g
+      LEFT JOIN "GatewayUserAccess" a ON a."gatewayId" = g."id"
+      LEFT JOIN "User" u ON u."id" = a."userId"
+      GROUP BY g."id"
+      ORDER BY g."priority" DESC
+      """, Map.of(), gatewayMapper());
   }
 
-  public List<Gateway> enabledGatewaysForModel(String model) {
+  public List<Gateway> enabledGatewaysForModel(String model, String userId) {
     List<Gateway> gateways = jdbc.query("""
-      SELECT * FROM "Gateway"
-      WHERE "enabled" = true
-        AND "model" = :model
-      ORDER BY "priority" DESC
-      """, Map.of("model", model), gatewayMapper());
+      SELECT g.*, COALESCE(array_agg(a."userId" ORDER BY u."email") FILTER (WHERE a."userId" IS NOT NULL), ARRAY[]::TEXT[]) AS "exclusiveUserIds"
+      FROM "Gateway" g
+      LEFT JOIN "GatewayUserAccess" a ON a."gatewayId" = g."id"
+      LEFT JOIN "User" u ON u."id" = a."userId"
+      WHERE g."enabled" = true
+        AND g."model" = :model
+        AND (
+          NOT EXISTS (SELECT 1 FROM "GatewayUserAccess" any_access WHERE any_access."gatewayId" = g."id")
+          OR EXISTS (
+            SELECT 1 FROM "GatewayUserAccess" own_access
+            WHERE own_access."gatewayId" = g."id"
+              AND own_access."userId" = :userId
+          )
+        )
+      GROUP BY g."id"
+      ORDER BY g."priority" DESC
+      """, Map.of("model", model, "userId", userId), gatewayMapper());
     Collections.shuffle(gateways);
     gateways.sort((left, right) -> Integer.compare(right.priority(), left.priority()));
     return gateways;
@@ -209,6 +235,7 @@ public class Db {
       rs.getString("healthCheckPath"),
       rs.getString("generationPath"),
       rs.getString("upstreamGroup"),
+      stringArray(rs, "exclusiveUserIds"),
       rs.getString("model"),
       rs.getInt("costCredits"),
       rs.getInt("timeoutMs"),

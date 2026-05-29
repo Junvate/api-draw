@@ -1,6 +1,7 @@
 package com.gptnet.image.model;
 
 import java.time.Instant;
+import java.util.List;
 
 public record Gateway(
   String id,
@@ -12,6 +13,7 @@ public record Gateway(
   String healthCheckPath,
   String generationPath,
   String upstreamGroup,
+  List<String> exclusiveUserIds,
   String model,
   int costCredits,
   int timeoutMs,

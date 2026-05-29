@@ -17,9 +17,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -37,6 +34,7 @@ public class ImageService {
   private static final int MAX_REFERENCE_IMAGES = 16;
   private static final int MAX_IMAGES_PER_REQUEST = 20;
   private static final long MAX_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
+  private static final int FAL_POLL_INTERVAL_MS = 2000;
   private final Db db;
   private final SecurityService security;
   private final AuthService auth;
@@ -120,7 +118,7 @@ public class ImageService {
     String requestedModel = Optional.of(cleanFormString(params.dto().getModel())).filter(s -> !s.isBlank()).orElse("gpt-image-2");
     String requestedQuality = cleanFormString(params.dto().getQuality());
     String normalizedSize = normalizeSize(firstNonBlank(params.dto().getSize(), params.dto().getRatio()), requestedQuality);
-    Gateway gateway = selectGateway(requestedModel, normalizedSize);
+    Gateway gateway = selectGateway(requestedModel, normalizedSize, params.userId());
     int unitCost = is4kSize(normalizedSize) ? 8 : is2kSize(normalizedSize) ? 6 : Math.max(1, gateway.costCredits());
     int imageCount = normalizeImageCount(params.dto().getCount());
     int cost = unitCost * imageCount;
@@ -133,7 +131,8 @@ public class ImageService {
   public ImageTask createTaskRecord(CreateTaskParams params, String taskId, Gateway gateway, String prompt, String normalizedSize, String requestedQuality, int imageCount, int cost) {
     try {
       auth.lockUserWallet(params.userId());
-      if (db.walletBalance(params.userId()) < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足");
+      int balance = db.walletBalance(params.userId());
+      if (balance < cost) throw AppException.badRequest("INSUFFICIENT_CREDITS", "积分不足：本次需要 " + cost + " 积分，当前余额 " + balance + " 积分");
       db.jdbc().update("""
         INSERT INTO "ImageTask" (
           "id", "userId", "apiKeyId", "gatewayId", "requestId", "model", "prompt", "size",
@@ -480,9 +479,9 @@ public class ImageService {
     );
   }
 
-  public Gateway selectGateway(String model, String size) {
+  public Gateway selectGateway(String model, String size, String userId) {
     String preferredGroup = groupForSize(size);
-    List<Gateway> all = db.enabledGatewaysForModel(model).stream()
+    List<Gateway> all = db.enabledGatewaysForModel(model, userId).stream()
       .filter(item -> resolveGatewayApiKey(item, false) != null)
       .filter(item -> !isCooling(item))
       .toList();
@@ -494,11 +493,11 @@ public class ImageService {
 
   private Optional<Gateway> activeGatewayForTask(ImageTask task) {
     Gateway current = task.gateway();
-    if (current != null && current.enabled() && !isCooling(current) && resolveGatewayApiKey(current, false) != null) {
+    if (current != null && current.enabled() && gatewayAllowsUser(current, task.userId()) && !isCooling(current) && resolveGatewayApiKey(current, false) != null) {
       return Optional.of(current);
     }
     try {
-      Gateway replacement = selectGateway(task.model(), task.size());
+      Gateway replacement = selectGateway(task.model(), task.size(), task.userId());
       db.jdbc().update("""
         UPDATE "ImageTask" SET "gatewayId" = :gatewayId, "updatedAt" = now()
         WHERE "id" = :id AND "status" = 'queued'::"ImageTaskStatus"
@@ -534,28 +533,40 @@ public class ImageService {
   private GenerationRun callGateway(ImageTask task, Gateway gateway) throws Exception {
     String apiKey = resolveGatewayApiKey(gateway);
     List<LoadedReferenceImage> referenceImages = loadReferenceImages(task.id());
+    if ("fal".equals(gateway.provider()) && !referenceImages.isEmpty()) {
+      throw AppException.badRequest("FAL_REFERENCE_IMAGE_UNSUPPORTED", "fal.ai 渠道暂不支持参考图编辑，请使用纯文本生成或 OpenAI 兼容渠道");
+    }
     int existingCount = db.resultsForTask(task.id()).size();
     int count = Math.max(0, task.imageCount() - existingCount);
     if (count == 0) return new GenerationRun(List.of(), null);
-    ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     try {
-      List<CompletableFuture<ImageAttempt>> futures = new ArrayList<>();
-      for (int index = 0; index < count; index += 1) {
-        int attemptIndex = index;
-        int variantIndex = existingCount + index;
-        futures.add(CompletableFuture.supplyAsync(() -> callGatewayImage(task, gateway, apiKey, referenceImages, count, attemptIndex, variantIndex), pool));
+      GatewayResult result = referenceImages.isEmpty()
+        ? callGatewayGeneration(task, gateway, apiKey, count, existingCount)
+        : callGatewayEdit(task, gateway, apiKey, referenceImages, count, existingCount);
+      persistGatewayResult(task, result);
+      touchProcessingTask(task.id());
+      return new GenerationRun(List.of(result), null);
+    } catch (Exception exception) {
+      if (storageException(exception) != null) throw exception;
+      UpstreamException error = upstreamException(exception);
+      if (count > 1 && shouldFallbackToSingleImageRequests(error)) {
+        log.warn("[task={}] Gateway rejected batched image request count={} gateway={} code={} message={}; falling back to sequential single-image requests",
+          task.id(), count, gateway.name(), error.code(), error.getMessage());
+        return callGatewayOneByOne(task, gateway, apiKey, referenceImages, existingCount, count);
       }
-      List<GatewayResult> results = new ArrayList<>();
-      UpstreamException lastError = null;
-      for (CompletableFuture<ImageAttempt> future : futures) {
-        ImageAttempt attempt = future.join();
-        if (attempt.result() != null) results.add(attempt.result());
-        if (attempt.error() != null) lastError = attempt.error();
-      }
-      return new GenerationRun(results, lastError);
-    } finally {
-      pool.shutdown();
+      throw exception;
     }
+  }
+
+  private GenerationRun callGatewayOneByOne(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int existingCount, int count) {
+    List<GatewayResult> results = new ArrayList<>();
+    UpstreamException lastError = null;
+    for (int index = 0; index < count; index += 1) {
+      ImageAttempt attempt = callGatewayImage(task, gateway, apiKey, referenceImages, count, index, existingCount + index);
+      if (attempt.result() != null) results.add(attempt.result());
+      if (attempt.error() != null) lastError = attempt.error();
+    }
+    return new GenerationRun(results, lastError);
   }
 
   private ImageAttempt callGatewayImage(ImageTask task, Gateway gateway, String apiKey, List<LoadedReferenceImage> referenceImages, int count, int attemptIndex, int variantIndex) {
@@ -564,10 +575,7 @@ public class ImageService {
         ? callGatewayGeneration(task, gateway, apiKey, 1, variantIndex)
         : callGatewayEdit(task, gateway, apiKey, referenceImages, 1, variantIndex);
       persistGatewayResult(task, result);
-      db.jdbc().update("""
-        UPDATE "ImageTask" SET "updatedAt" = now()
-        WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
-        """, Map.of("id", task.id()));
+      touchProcessingTask(task.id());
       return new ImageAttempt(variantIndex, result, null);
     } catch (Exception exception) {
       if (storageException(exception) != null) throw new RuntimeException(exception);
@@ -577,6 +585,13 @@ public class ImageService {
         task.id(), attemptIndex + 1, count, gateway.name(), error.code(), error.getMessage());
       return new ImageAttempt(variantIndex, null, error);
     }
+  }
+
+  private void touchProcessingTask(String taskId) {
+    db.jdbc().update("""
+      UPDATE "ImageTask" SET "updatedAt" = now()
+      WHERE "id" = :id AND "status" = 'processing'::"ImageTaskStatus"
+      """, Map.of("id", taskId));
   }
 
   private void persistGatewayResult(ImageTask task, GatewayResult result) {
@@ -629,6 +644,7 @@ public class ImageService {
 
   @SuppressWarnings("unchecked")
   private GatewayResult callGatewayGeneration(ImageTask task, Gateway gateway, String apiKey, int n, int variantIndex) {
+    if ("fal".equals(gateway.provider())) return callFalGatewayGeneration(task, gateway, apiKey, n);
     String generationPath = Optional.ofNullable(gateway.generationPath()).filter(s -> !s.isBlank()).orElse("/images/generations");
     String upstreamGroup = Optional.ofNullable(gateway.upstreamGroup()).filter(s -> !s.isBlank()).orElse(groupForSize(task.size()));
     String url = upstreamUrl(gateway.baseUrl(), generationPath);
@@ -641,8 +657,8 @@ public class ImageService {
       response = upstream.json(url, "POST", Map.of("Authorization", "Bearer " + apiKey), body, gateway.timeoutMs());
     }
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(url, response.text());
-    List<Map<String, Object>> dataList = allData(response.payload());
-    if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
+    List<Map<String, Object>> dataList = imageData(response.payload(), n);
+    if (dataList.isEmpty()) {
       throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像网关没有返回结果", response.status(), true).withDebug(url, response.text());
     }
     if (dataList.get(0).get("url") != null) {
@@ -663,6 +679,62 @@ public class ImageService {
     return new GatewayResult(first.url(), task.outputFormat(), null, null, first.storageKey(), first.sizeBytes(), first.hash(), extras);
   }
 
+  private GatewayResult callFalGatewayGeneration(ImageTask task, Gateway gateway, String apiKey, int n) {
+    String path = Optional.ofNullable(gateway.generationPath()).filter(s -> !s.isBlank()).orElse("/openai/gpt-image-2");
+    String url = upstreamUrl(gateway.baseUrl(), path);
+    Map<String, Object> body = Maps.of(
+      "prompt", task.prompt(),
+      "image_size", falImageSize(task.size()),
+      "quality", falQuality(task.quality()),
+      "num_images", n,
+      "output_format", falOutputFormat(task.outputFormat())
+    );
+    UpstreamClient.UpstreamResponse submit = upstream.json(url, "POST",
+      Map.of("Authorization", "Key " + apiKey), body, gateway.timeoutMs());
+    UpstreamClient.UpstreamResponse response = submit;
+    String responseUrl = stringValue(submit.payload().get("response_url"));
+    if (submit.ok() && responseUrl != null && !responseUrl.isBlank() && falImages(submit.payload(), n).isEmpty()) {
+      response = pollFalResult(responseUrl, apiKey, gateway.timeoutMs());
+    }
+    if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "fal.ai 返回 HTTP " + response.status())).withDebug(url, response.text());
+    List<Map<String, Object>> images = falImages(response.payload(), n);
+    if (images.isEmpty()) {
+      throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "fal.ai 没有返回图片结果", response.status(), true).withDebug(url, response.text());
+    }
+    List<ExtraImage> extras = images.stream().skip(1)
+      .map(this::falImageUrl)
+      .filter(item -> item != null && !item.isBlank())
+      .map(item -> new ExtraImage(item, null, null, null))
+      .toList();
+    String first = falImageUrl(images.get(0));
+    return new GatewayResult(first, task.outputFormat(), null, null, null, null, null, extras);
+  }
+
+  private UpstreamClient.UpstreamResponse pollFalResult(String responseUrl, String apiKey, int timeoutMs) {
+    long deadline = System.currentTimeMillis() + Math.max(1000, timeoutMs);
+    UpstreamClient.UpstreamResponse last = null;
+    while (System.currentTimeMillis() < deadline) {
+      last = upstream.json(responseUrl, "GET", Map.of("Authorization", "Key " + apiKey), null, Math.max(1000, Math.min(30000, timeoutMs)));
+      if (!last.ok()) return last;
+      if (!falImages(last.payload(), MAX_IMAGES_PER_REQUEST).isEmpty()) return last;
+      String status = Optional.ofNullable(stringValue(last.payload().get("status"))).orElse("").toUpperCase();
+      if (List.of("FAILED", "ERROR", "CANCELLED").contains(status)) return last;
+      sleepBeforeFalPoll(deadline);
+    }
+    throw new UpstreamException("UPSTREAM_TIMEOUT", "fal.ai 队列等待超时", 0, true).withDebug(responseUrl, last == null ? null : last.text());
+  }
+
+  private void sleepBeforeFalPoll(long deadline) {
+    long waitMs = Math.min(FAL_POLL_INTERVAL_MS, Math.max(0, deadline - System.currentTimeMillis()));
+    if (waitMs <= 0) return;
+    try {
+      Thread.sleep(waitMs);
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new UpstreamException("UPSTREAM_TIMEOUT", "fal.ai 队列等待被中断", 0, true);
+    }
+  }
+
   private Map<String, Object> imageGenerationRequestBody(String url, ImageTask task, int n) {
     String format = "jpg".equals(task.outputFormat()) ? "jpeg" : task.outputFormat();
     boolean requestUrlResponse = shouldRequestUrlResponse(url, task.model());
@@ -672,7 +744,8 @@ public class ImageService {
         "prompt", task.prompt(),
         "size", task.size(),
         "quality", task.quality(),
-        "format", format
+        "format", format,
+        "n", n
       );
       if (requestUrlResponse) body.put("response_format", "url");
       return body;
@@ -709,6 +782,22 @@ public class ImageService {
     return response.status() == 400 && message.contains("response_format");
   }
 
+  private boolean shouldFallbackToSingleImageRequests(UpstreamException error) {
+    if (error == null) return false;
+    String message = Optional.ofNullable(error.getMessage()).orElse("").toLowerCase();
+    if (error.status() != 400 && !"UPSTREAM_REJECTED".equals(error.code())) return false;
+    return message.contains(" n ")
+      || message.contains("\"n\"")
+      || message.contains("'n'")
+      || message.contains("parameter n")
+      || message.contains("unsupported")
+      || message.contains("not support")
+      || message.contains("multiple")
+      || message.contains("too many images")
+      || message.contains("maximum")
+      || message.contains("max");
+  }
+
   private boolean hasPart(List<Part> parts, String name) {
     return parts.stream().anyMatch(part -> name.equals(part.name()));
   }
@@ -734,8 +823,8 @@ public class ImageService {
       response = upstream.multipart(editUrl, Map.of("Authorization", "Bearer " + apiKey), parts, gateway.timeoutMs());
     }
     if (!response.ok()) throw UpstreamException.fromHttp(response.status(), upstream.errorMessage(response.payload(), "上游返回 HTTP " + response.status())).withDebug(editUrl, response.text());
-    List<Map<String, Object>> dataList = allData(response.payload());
-    if (dataList.isEmpty() || (dataList.get(0).get("b64_json") == null && dataList.get(0).get("url") == null)) {
+    List<Map<String, Object>> dataList = imageData(response.payload(), n);
+    if (dataList.isEmpty()) {
       throw new UpstreamException("UPSTREAM_EMPTY_RESULT", "图像编辑网关没有返回结果", response.status(), true).withDebug(editUrl, response.text());
     }
     if (dataList.get(0).get("url") != null) {
@@ -772,6 +861,54 @@ public class ImageService {
       return list.stream().filter(i -> i instanceof Map).map(i -> (Map<String, Object>) i).toList();
     }
     return List.of();
+  }
+
+  private List<Map<String, Object>> imageData(Map<String, Object> payload, int max) {
+    int limit = Math.max(1, max);
+    return allData(payload).stream()
+      .filter(this::hasImageData)
+      .limit(limit)
+      .toList();
+  }
+
+  @SuppressWarnings("unchecked")
+  private List<Map<String, Object>> falImages(Map<String, Object> payload, int max) {
+    int limit = Math.max(1, max);
+    Object images = payload.get("images");
+    if (images instanceof List<?> list) {
+      return list.stream()
+        .filter(item -> item instanceof Map)
+        .map(item -> (Map<String, Object>) item)
+        .filter(item -> falImageUrl(item) != null)
+        .limit(limit)
+        .toList();
+    }
+    Map<String, Object> data = firstData(payload);
+    if (data != null && data.get("images") instanceof List<?> list) {
+      return list.stream()
+        .filter(item -> item instanceof Map)
+        .map(item -> (Map<String, Object>) item)
+        .filter(item -> falImageUrl(item) != null)
+        .limit(limit)
+        .toList();
+    }
+    return List.of();
+  }
+
+  private String falImageUrl(Map<String, Object> image) {
+    Object url = image.get("url");
+    return url == null || String.valueOf(url).isBlank() || "null".equals(String.valueOf(url)) ? null : String.valueOf(url);
+  }
+
+  private String stringValue(Object value) {
+    return value == null || "null".equals(String.valueOf(value)) ? null : String.valueOf(value);
+  }
+
+  private boolean hasImageData(Map<String, Object> item) {
+    Object b64 = item.get("b64_json");
+    if (b64 != null && !String.valueOf(b64).isBlank() && !"null".equals(String.valueOf(b64))) return true;
+    Object url = item.get("url");
+    return url != null && !String.valueOf(url).isBlank() && !"null".equals(String.valueOf(url));
   }
 
   private StoredImage persistGeneratedImage(ImageTask task, String b64, String format, int variantIndex) {
@@ -921,6 +1058,11 @@ public class ImageService {
     return gateway.disabledUntil() != null && gateway.disabledUntil().isAfter(Instant.now());
   }
 
+  private boolean gatewayAllowsUser(Gateway gateway, String userId) {
+    List<String> exclusiveUserIds = gateway.exclusiveUserIds();
+    return exclusiveUserIds == null || exclusiveUserIds.isEmpty() || exclusiveUserIds.contains(userId);
+  }
+
   private String editPathForGateway(Gateway gateway) {
     String path = Optional.ofNullable(gateway.generationPath()).orElse("/images/generations");
     if (path.contains("/images/edits")) return path;
@@ -957,6 +1099,29 @@ public class ImageService {
     if (is4kSize(size)) return "GPT-Image-2-4k";
     if (is2kSize(size)) return "GPT-Image-2-2k";
     return null;
+  }
+
+  private String falImageSize(String size) {
+    if (size == null || size.isBlank()) return "square_hd";
+    return switch (size) {
+      case "1024x1024", "2048x2048" -> "square_hd";
+      case "2048x1152", "3840x2160" -> "landscape_16_9";
+      case "1152x2048", "2160x3840" -> "portrait_16_9";
+      default -> size;
+    };
+  }
+
+  private String falQuality(String quality) {
+    if ("low".equalsIgnoreCase(quality)) return "low";
+    if ("high".equalsIgnoreCase(quality)) return "high";
+    return "medium";
+  }
+
+  private String falOutputFormat(String outputFormat) {
+    String format = outputFormat == null || outputFormat.isBlank() ? "png" : outputFormat.toLowerCase();
+    if ("jpg".equals(format) || "jpeg".equals(format)) return "jpeg";
+    if ("webp".equals(format)) return "webp";
+    return "png";
   }
 
   private String publicStatus(String status) {

@@ -4,6 +4,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import java.util.List;
 
 public final class AdminDtos {
   private AdminDtos() {}
@@ -137,6 +138,10 @@ public final class AdminDtos {
     private String generationPath;
     @Size(max = 120)
     private String upstreamGroup;
+    @Size(max = 10000)
+    private String exclusiveUserIdsText;
+    @Size(max = 500)
+    private List<@Size(max = 80) String> exclusiveUserIds;
     @Size(max = 2048)
     private String apiKey;
     @Size(max = 120)
@@ -167,6 +172,10 @@ public final class AdminDtos {
     public void setGenerationPath(String generationPath) { this.generationPath = generationPath; }
     public String getUpstreamGroup() { return upstreamGroup; }
     public void setUpstreamGroup(String upstreamGroup) { this.upstreamGroup = upstreamGroup; }
+    public String getExclusiveUserIdsText() { return exclusiveUserIdsText; }
+    public void setExclusiveUserIdsText(String exclusiveUserIdsText) { this.exclusiveUserIdsText = exclusiveUserIdsText; }
+    public List<String> getExclusiveUserIds() { return exclusiveUserIds; }
+    public void setExclusiveUserIds(List<String> exclusiveUserIds) { this.exclusiveUserIds = exclusiveUserIds; }
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     public String getModel() { return model; }

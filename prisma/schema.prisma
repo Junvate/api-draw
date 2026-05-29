@@ -24,6 +24,7 @@ enum ApiKeyStatus {
 
 enum GatewayProvider {
   openai
+  fal
 }
 
 enum GatewayHealth {
@@ -85,6 +86,7 @@ model User {
   apiKeys       ApiKey[]
   imageTasks    ImageTask[]
   walletEntries WalletEntry[]
+  gatewayAccess GatewayUserAccess[]
 
   @@index([tenantId])
   @@index([status])
@@ -167,6 +169,7 @@ model Gateway {
   healthCheckPath     String          @default("/models")
   generationPath      String          @default("/images/generations")
   upstreamGroup       String?
+  userAccess          GatewayUserAccess[]
   model               String
   costCredits         Int             @default(1)
   timeoutMs           Int             @default(90000)
@@ -187,6 +190,18 @@ model Gateway {
 
   @@index([enabled, priority])
   @@index([healthStatus])
+}
+
+model GatewayUserAccess {
+  gatewayId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  gateway Gateway @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([gatewayId, userId])
+  @@index([userId, gatewayId])
 }
 
 model ImageTask {

@@ -208,6 +208,7 @@
                   <select id="gatewayProviderFilter">
                     <option value="">全部类型</option>
                     <option value="openai">OpenAI 兼容</option>
+                    <option value="fal">fal.ai</option>
                   </select>
                 </div>
 
@@ -227,16 +228,17 @@
                   <h3>新增渠道 / 中转站</h3>
                   <p>每个渠道代表一个上游入口或中转站，包含模型、真实 API Key、优先级和成本配置。</p>
                 </div>
-                <div class="channel-create-tip">API Key 填 sk-...，Base URL 填 https://...</div>
+                <div class="channel-create-tip">OpenAI 填 sk-...；fal 填 fal Key</div>
               </div>
               <form class="form-grid channel-form-grid" id="gatewayForm">
                 <label>名称<input name="name" placeholder="例如：new-api 主入口" required /></label>
-                <label>类型<select name="provider"><option value="openai">OpenAI 兼容</option></select></label>
+                <label>类型<select name="provider"><option value="openai">OpenAI 兼容</option><option value="fal">fal.ai</option></select></label>
                 <label>Base URL<input name="baseUrl" value="https://api.openai.com/v1" placeholder="例如：https://api.chatgpt-code.com" /></label>
                   <label>API Key<input name="apiKey" type="password" placeholder="直接填写渠道的真实 API Key" /></label>
                 <label>测试路径<input name="healthCheckPath" value="/models" placeholder="/pg/chat/completions" /></label>
                 <label>生成路径<input name="generationPath" value="/images/generations" placeholder="/pg/images/generations" /></label>
                 <label>分组<input name="upstreamGroup" placeholder="GPT-Image-2-2k" /></label>
+                <label class="channel-user-access-field">专属用户<textarea name="exclusiveUserIdsText" rows="2" placeholder="留空为所有用户可用；填写用户邮箱或用户 ID，多个用换行/逗号分隔"></textarea></label>
                 <label>模型<input name="model" value="gpt-image-2" placeholder="例如：gpt-image-1" /></label>
                 <label>单次积分<input name="costCredits" type="number" value="8" min="0" /></label>
                 <label>超时 ms<input name="timeoutMs" type="number" value="90000" min="1000" /></label>

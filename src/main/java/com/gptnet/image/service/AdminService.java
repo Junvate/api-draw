@@ -22,9 +22,11 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -304,8 +306,10 @@ public class AdminService {
       """, gatewayParams(id, body)
       .addValue("name", name)
       .addValue("apiKeyCiphertext", secret.isBlank() ? null : security.encryptSecret(secret)));
+    List<String> exclusiveUserIds = resolveGatewayExclusiveUserIds(body);
+    replaceGatewayUserAccess(id, exclusiveUserIds);
     Gateway gateway = db.gatewayById(id).orElseThrow();
-    audit(actor, request, "gateway.create", id, Maps.of("name", gateway.name(), "provider", gateway.provider(), "model", gateway.model()));
+    audit(actor, request, "gateway.create", id, Maps.of("name", gateway.name(), "provider", gateway.provider(), "model", gateway.model(), "exclusiveUserIds", exclusiveUserIds));
     return Maps.of("gateway", publicGateway(gateway));
   }
 
@@ -354,6 +358,9 @@ public class AdminService {
         "updatedAt" = now()
       WHERE "id" = :id
       """, params);
+    if (hasGatewayExclusiveUserInput(body)) {
+      replaceGatewayUserAccess(id, resolveGatewayExclusiveUserIds(body));
+    }
     audit(actor, request, "gateway.update", id, publicPatchBody(body));
     return Maps.of("gateway", publicGateway(db.gatewayById(id).orElseThrow()));
   }
@@ -379,6 +386,12 @@ public class AdminService {
       Gateway updated = updateGatewayHealth(id, "degraded", false, started, keyError);
       audit(actor, request, "gateway.health_check", id, Maps.of("ok", false, "error", keyError, "latencyMs", System.currentTimeMillis() - started));
       return Maps.of("gateway", publicGateway(updated), "ok", false, "latencyMs", System.currentTimeMillis() - started, "error", keyError);
+    }
+    if ("fal".equals(gateway.provider())) {
+      Gateway updated = updateGatewayHealth(id, "healthy", true, started, null);
+      String note = "fal.ai 没有只读模型检测接口，已完成本地配置检查，实际生成时会校验队列调用";
+      audit(actor, request, "gateway.health_check", id, Maps.of("ok", true, "note", note, "latencyMs", System.currentTimeMillis() - started));
+      return Maps.of("gateway", publicGateway(updated), "ok", true, "latencyMs", System.currentTimeMillis() - started, "note", note);
     }
     try {
       String path = Optional.ofNullable(gateway.healthCheckPath()).filter(s -> !s.isBlank()).orElse("/models");
@@ -960,6 +973,9 @@ public class AdminService {
       "healthCheckPath", gateway.healthCheckPath(),
       "generationPath", gateway.generationPath(),
       "upstreamGroup", gateway.upstreamGroup(),
+      "exclusiveUserIds", gateway.exclusiveUserIds(),
+      "exclusiveUserIdsText", String.join("\n", gateway.exclusiveUserIds() == null ? List.of() : gateway.exclusiveUserIds()),
+      "exclusiveUsers", gatewayExclusiveUsers(gateway.id()),
       "model", gateway.model(),
       "costCredits", gateway.costCredits(),
       "timeoutMs", gateway.timeoutMs(),
@@ -1033,12 +1049,14 @@ public class AdminService {
   }
 
   private MapSqlParameterSource gatewayParams(String id, GatewayRequest body) {
+    String provider = Optional.ofNullable(body.getProvider()).filter(s -> !s.isBlank()).orElse("openai").trim();
+    boolean fal = "fal".equals(provider);
     return new MapSqlParameterSource()
       .addValue("id", id)
-      .addValue("provider", Optional.ofNullable(body.getProvider()).filter(s -> !s.isBlank()).orElse("openai"))
-      .addValue("baseUrl", Optional.ofNullable(body.getBaseUrl()).filter(s -> !s.isBlank()).orElse("https://api.openai.com/v1").trim())
-      .addValue("healthCheckPath", Optional.ofNullable(body.getHealthCheckPath()).filter(s -> !s.isBlank()).orElse("/models").trim())
-      .addValue("generationPath", Optional.ofNullable(body.getGenerationPath()).filter(s -> !s.isBlank()).orElse("/images/generations").trim())
+      .addValue("provider", provider)
+      .addValue("baseUrl", Optional.ofNullable(body.getBaseUrl()).filter(s -> !s.isBlank()).orElse(fal ? "https://queue.fal.run" : "https://api.openai.com/v1").trim())
+      .addValue("healthCheckPath", Optional.ofNullable(body.getHealthCheckPath()).filter(s -> !s.isBlank()).orElse(fal ? "/openai/gpt-image-2" : "/models").trim())
+      .addValue("generationPath", Optional.ofNullable(body.getGenerationPath()).filter(s -> !s.isBlank()).orElse(fal ? "/openai/gpt-image-2" : "/images/generations").trim())
       .addValue("upstreamGroup", blankToNull(body.getUpstreamGroup()))
       .addValue("model", Optional.ofNullable(body.getModel()).filter(s -> !s.isBlank()).orElse("gpt-image-2").trim())
       .addValue("costCredits", body.getCostCredits() == null ? 8 : body.getCostCredits())
@@ -1047,7 +1065,69 @@ public class AdminService {
       .addValue("priority", body.getPriority() == null ? 1 : body.getPriority());
   }
 
+  private boolean hasGatewayExclusiveUserInput(GatewayRequest body) {
+    return body.getExclusiveUserIds() != null || body.getExclusiveUserIdsText() != null;
+  }
+
+  private List<String> resolveGatewayExclusiveUserIds(GatewayRequest body) {
+    List<String> rawValues = new ArrayList<>();
+    if (body.getExclusiveUserIds() != null) rawValues.addAll(body.getExclusiveUserIds());
+    if (body.getExclusiveUserIdsText() != null) {
+      rawValues.addAll(List.of(body.getExclusiveUserIdsText().split("[,，;；\\s]+")));
+    }
+    Set<String> tokens = new LinkedHashSet<>();
+    for (String raw : rawValues) {
+      String value = Optional.ofNullable(raw).orElse("").trim();
+      if (!value.isBlank()) tokens.add(value);
+    }
+    if (tokens.isEmpty()) return List.of();
+
+    Set<String> ids = new LinkedHashSet<>();
+    List<String> missing = new ArrayList<>();
+    for (String token : tokens) {
+      Optional<User> user = token.contains("@")
+        ? db.userByEmail(token.toLowerCase())
+        : db.userById(token);
+      if (user.isPresent()) ids.add(user.get().id());
+      else missing.add(token);
+    }
+    if (!missing.isEmpty()) {
+      throw AppException.badRequest("INVALID_GATEWAY_USERS", "专属用户不存在：" + String.join("、", missing));
+    }
+    return new ArrayList<>(ids);
+  }
+
+  private void replaceGatewayUserAccess(String gatewayId, List<String> userIds) {
+    db.jdbc().update("DELETE FROM \"GatewayUserAccess\" WHERE \"gatewayId\" = :gatewayId", Map.of("gatewayId", gatewayId));
+    for (String userId : userIds) {
+      db.jdbc().update("""
+        INSERT INTO "GatewayUserAccess" ("gatewayId", "userId")
+        VALUES (:gatewayId, :userId)
+        ON CONFLICT ("gatewayId", "userId") DO NOTHING
+        """, Map.of("gatewayId", gatewayId, "userId", userId));
+    }
+  }
+
+  private List<Map<String, Object>> gatewayExclusiveUsers(String gatewayId) {
+    return db.jdbc().query("""
+      SELECT u."id", u."email", u."name", u."status"
+      FROM "GatewayUserAccess" a
+      JOIN "User" u ON u."id" = a."userId"
+      WHERE a."gatewayId" = :gatewayId
+      ORDER BY u."email"
+      """, Map.of("gatewayId", gatewayId), (rs, rowNum) -> Maps.of(
+        "id", rs.getString("id"),
+        "email", rs.getString("email"),
+        "name", rs.getString("name"),
+        "status", rs.getString("status")
+      ));
+  }
+
   private void validateGatewayInput(GatewayRequest body, String apiKey) {
+    String provider = Optional.ofNullable(body.getProvider()).orElse("").trim();
+    if (!provider.isBlank() && !List.of("openai", "fal").contains(provider)) {
+      throw AppException.badRequest("INVALID_GATEWAY_PROVIDER", "不支持的渠道类型");
+    }
     String baseUrl = Optional.ofNullable(body.getBaseUrl()).orElse("").trim();
     if (!baseUrl.isBlank()) outboundUrlPolicy.requirePublicHttpUrl(baseUrl);
     if (apiKey != null && !apiKey.isBlank() && !isMaskedSecret(apiKey)) {
@@ -1413,7 +1493,8 @@ public class AdminService {
       "usageRecords", scalarCount("UsageRecord", "\"userId\" = :userId OR \"apiKeyId\" IN (SELECT \"id\" FROM \"ApiKey\" WHERE \"userId\" = :userId)", userId),
       "redemptionUses", scalarCount("RedemptionUse", "\"userId\" = :userId", userId),
       "riskAlerts", scalarCount("RiskAlert", "\"userId\" = :userId", userId),
-      "warnings", scalarCount("UserWarning", "\"userId\" = :userId", userId)
+      "warnings", scalarCount("UserWarning", "\"userId\" = :userId", userId),
+      "gatewayAccess", scalarCount("GatewayUserAccess", "\"userId\" = :userId", userId)
     );
   }
 
@@ -1434,6 +1515,7 @@ public class AdminService {
     db.jdbc().update("UPDATE \"RedemptionCode\" SET \"usedBy\" = array_remove(\"usedBy\", :userId), \"updatedAt\" = now() WHERE :userId = ANY(\"usedBy\")", params);
     db.jdbc().update("DELETE FROM \"RedemptionUse\" WHERE \"userId\" = :userId", params);
     db.jdbc().update("DELETE FROM \"RiskAlert\" WHERE \"userId\" = :userId", params);
+    db.jdbc().update("DELETE FROM \"GatewayUserAccess\" WHERE \"userId\" = :userId", params);
     db.jdbc().update("UPDATE \"UserWarning\" SET \"actorId\" = NULL WHERE \"actorId\" = :userId", params);
     db.jdbc().update("DELETE FROM \"UserWarning\" WHERE \"userId\" = :userId", params);
     db.jdbc().update("UPDATE \"SensitiveWordRule\" SET \"createdBy\" = NULL WHERE \"createdBy\" = :userId", params);

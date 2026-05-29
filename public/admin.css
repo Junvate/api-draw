@@ -1865,7 +1865,7 @@ td code {
   background: #fffbeb;
 }
 
-input.is-dirty, select.is-dirty {
+input.is-dirty, select.is-dirty, textarea.is-dirty {
   border-color: var(--amber);
   background: #fffbeb;
 }
@@ -2107,6 +2107,14 @@ input.is-dirty, select.is-dirty {
   grid-template-columns: repeat(5, minmax(140px, 1fr));
 }
 
+.channel-user-access-field {
+  grid-column: span 2;
+}
+
+.channel-user-access-field textarea {
+  min-height: 66px;
+}
+
 .channel-form-message {
   margin: 0;
   padding: 6px 16px 12px;
@@ -2167,6 +2175,12 @@ input.is-dirty, select.is-dirty {
   font-size: 12px;
 }
 
+.channel-table td textarea {
+  min-height: 48px;
+  font-size: 12px;
+  resize: vertical;
+}
+
 .channel-table .select-col { width: 44px; }
 
 .gateway-meta-tags {
@@ -2189,6 +2203,11 @@ input.is-dirty, select.is-dirty {
 .gateway-tag.provider-tag {
   background: var(--accent-light);
   color: var(--accent);
+}
+
+.gateway-tag.access-tag {
+  background: var(--green-light);
+  color: var(--green-text);
 }
 
 .gateway-tag.id-tag {
@@ -2920,6 +2939,7 @@ body.admin-sidebar-collapsed .side-footer button {
   .gallery-pager button { flex: 1; }
   .form-grid { grid-template-columns: repeat(2, 1fr); }
   .channel-form-grid { grid-template-columns: repeat(2, 1fr); }
+  .channel-user-access-field { grid-column: 1 / -1; }
   .risk-layout { grid-template-columns: 1fr; }
 }
 
@@ -3200,6 +3220,10 @@ body.admin-sidebar-collapsed .side-footer button {
     padding: 0 10px 12px;
   }
 
+  .channel-user-access-field {
+    grid-column: auto;
+  }
+
   .create-box summary {
     height: auto;
     min-height: 46px;
@@ -3307,7 +3331,7 @@ body.admin-sidebar-collapsed .side-footer button {
   .gateway-table td:nth-child(2)::before,
   .channel-table td:nth-child(2)::before { content: "渠道"; }
   .gateway-table td:nth-child(3)::before,
-  .channel-table td:nth-child(3)::before { content: "模型地址"; }
+  .channel-table td:nth-child(3)::before { content: "模型地址/用户"; }
   .gateway-table td:nth-child(4)::before,
   .channel-table td:nth-child(4)::before { content: "计费"; }
   .gateway-table td:nth-child(5)::before,

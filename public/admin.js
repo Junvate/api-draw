@@ -103,7 +103,7 @@ const searchTargets = {
 
 const ROW_DRAFT_CONFIG = {
   gateways: {
-    sourceFields: ["name", "provider", "model", "baseUrl", "apiKey", "healthCheckPath", "generationPath", "upstreamGroup", "costCredits", "timeoutMs", "priority", "enabled"],
+    sourceFields: ["name", "provider", "model", "baseUrl", "apiKey", "healthCheckPath", "generationPath", "upstreamGroup", "exclusiveUserIdsText", "costCredits", "timeoutMs", "priority", "enabled"],
     transientFields: [],
   },
   users: {
@@ -371,6 +371,22 @@ function isCoolingDown(gateway) {
   return gateway.disabledUntil && new Date(gateway.disabledUntil).getTime() > Date.now();
 }
 
+function gatewayProviderLabel(provider) {
+  if (provider === "openai") return "OpenAI 兼容";
+  if (provider === "fal") return "fal.ai";
+  return provider || "-";
+}
+
+function applyGatewayProviderDefaults(form) {
+  const provider = form.elements.provider?.value || "openai";
+  const fal = provider === "fal";
+  form.elements.baseUrl.value = fal ? "https://queue.fal.run" : "https://api.openai.com/v1";
+  form.elements.healthCheckPath.value = fal ? "/openai/gpt-image-2" : "/models";
+  form.elements.generationPath.value = fal ? "/openai/gpt-image-2" : "/images/generations";
+  form.elements.model.value = "gpt-image-2";
+  form.elements.apiKey.placeholder = fal ? "填写 fal.ai API Key" : "直接填写渠道的真实 API Key";
+}
+
 function formatLatency(value) {
   if (value === null || value === undefined || value === "") return "-";
   const number = Number(value);
@@ -523,6 +539,7 @@ function rawSourceFieldValue(type, entity, field) {
     if (field === "enabled") return entity.enabled ? "true" : "false";
     if (["costCredits", "timeoutMs", "priority"].includes(field)) return String(Number(entity[field] ?? 0));
     if (field === "apiKey") return entity.apiKey || "";
+    if (field === "exclusiveUserIdsText") return gatewayExclusiveUsersText(entity);
     return String(entity[field] ?? "");
   }
   if (type === "users") {
@@ -535,6 +552,7 @@ function rawSourceFieldValue(type, entity, field) {
 function normalizeDraftValue(type, field, value) {
   if (type === "gateways" && ["costCredits", "timeoutMs", "priority"].includes(field)) return Number(value || 0);
   if (type === "gateways" && field === "enabled") return value === true || value === "true";
+  if (type === "gateways" && field === "exclusiveUserIdsText") return parseGatewayAccessTokens(value).join("\n");
   return String(value ?? "").trim();
 }
 
@@ -552,6 +570,29 @@ function isDirtyDraftField(type, entity, field, rawValue) {
 function rowInputValue(type, id, field, entity) {
   const draft = getRowDraft(type, id);
   return draft[field] ?? rawSourceFieldValue(type, entity, field);
+}
+
+function parseGatewayAccessTokens(value) {
+  return String(value || "")
+    .split(/[,，;；\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function gatewayExclusiveUsersText(gateway) {
+  const users = Array.isArray(gateway?.exclusiveUsers) ? gateway.exclusiveUsers : [];
+  if (users.length) return users.map((user) => user.email || user.id).join("\n");
+  return Array.isArray(gateway?.exclusiveUserIds) ? gateway.exclusiveUserIds.join("\n") : "";
+}
+
+function gatewayAccessLabel(gateway) {
+  const users = Array.isArray(gateway?.exclusiveUsers) ? gateway.exclusiveUsers : [];
+  const ids = Array.isArray(gateway?.exclusiveUserIds) ? gateway.exclusiveUserIds : [];
+  const count = users.length || ids.length;
+  if (!count) return "所有用户";
+  const names = users.map((user) => user.email || user.id).filter(Boolean);
+  if (!names.length) return `${count} 个专属用户`;
+  return names.length <= 2 ? names.join("、") : `${names.slice(0, 2).join("、")} 等 ${count} 人`;
 }
 
 function getRowDraftState(type, id) {
@@ -1132,7 +1173,7 @@ function filteredGateways() {
   return state.gateways
     .filter((gateway) => !provider || gateway.provider === provider)
     .filter((gateway) => !status || (status === "enabled" ? gateway.enabled : !gateway.enabled))
-    .filter((gateway) => includesText(search, gateway.name, gateway.provider, gateway.model, gateway.baseUrl, gateway.id))
+    .filter((gateway) => includesText(search, gateway.name, gateway.provider, gateway.model, gateway.baseUrl, gateway.id, gatewayAccessLabel(gateway), gatewayExclusiveUsersText(gateway)))
     .sort((a, b) => b.priority - a.priority);
 }
 
@@ -1159,7 +1200,7 @@ function renderGateways() {
   $("gatewayRows").innerHTML = rows.map((gateway) => {
     const draftState = getRowDraftState("gateways", gateway.id);
     const cooling = isCoolingDown(gateway);
-    const providerLabel = rowInputValue("gateways", gateway.id, "provider", gateway) === "openai" ? "OpenAI 兼容" : rowInputValue("gateways", gateway.id, "provider", gateway);
+    const providerLabel = gatewayProviderLabel(rowInputValue("gateways", gateway.id, "provider", gateway));
     const enabledValue = rowInputValue("gateways", gateway.id, "enabled", gateway) === "true";
     return `
     <tr data-id="${gateway.id}" class="${draftState.anyDirty ? "is-dirty" : ""}">
@@ -1169,8 +1210,12 @@ function renderGateways() {
           <input class="${Object.prototype.hasOwnProperty.call(draftState.draft, "name") ? "is-dirty" : ""}" data-field="name" value="${escapeHtml(rowInputValue("gateways", gateway.id, "name", gateway))}" />
           <div class="gateway-meta-tags">
             <span class="gateway-tag provider-tag">${escapeHtml(providerLabel)}</span>
+            <span class="gateway-tag access-tag">${escapeHtml(gatewayAccessLabel(gateway))}</span>
           </div>
-          <select class="gateway-provider-select ${Object.prototype.hasOwnProperty.call(draftState.draft, "provider") ? "is-dirty" : ""}" data-field="provider"><option value="openai" ${rowInputValue("gateways", gateway.id, "provider", gateway) === "openai" ? "selected" : ""}>OpenAI 兼容</option></select>
+          <select class="gateway-provider-select ${Object.prototype.hasOwnProperty.call(draftState.draft, "provider") ? "is-dirty" : ""}" data-field="provider">
+            <option value="openai" ${rowInputValue("gateways", gateway.id, "provider", gateway) === "openai" ? "selected" : ""}>OpenAI 兼容</option>
+            <option value="fal" ${rowInputValue("gateways", gateway.id, "provider", gateway) === "fal" ? "selected" : ""}>fal.ai</option>
+          </select>
         </div>
       </td>
       <td>
@@ -1179,6 +1224,7 @@ function renderGateways() {
           <input class="${Object.prototype.hasOwnProperty.call(draftState.draft, "baseUrl") ? "is-dirty" : ""}" data-field="baseUrl" value="${escapeHtml(rowInputValue("gateways", gateway.id, "baseUrl", gateway))}" />
           <input class="${Object.prototype.hasOwnProperty.call(draftState.draft, "generationPath") ? "is-dirty" : ""}" data-field="generationPath" value="${escapeHtml(rowInputValue("gateways", gateway.id, "generationPath", gateway) || "/images/generations")}" />
           <input class="${Object.prototype.hasOwnProperty.call(draftState.draft, "upstreamGroup") ? "is-dirty" : ""}" data-field="upstreamGroup" value="${escapeHtml(rowInputValue("gateways", gateway.id, "upstreamGroup", gateway))}" placeholder="分组，可选" />
+          <textarea class="gateway-access-input ${Object.prototype.hasOwnProperty.call(draftState.draft, "exclusiveUserIdsText") ? "is-dirty" : ""}" data-field="exclusiveUserIdsText" rows="2" placeholder="专属用户邮箱/ID，留空为所有用户可用">${escapeHtml(rowInputValue("gateways", gateway.id, "exclusiveUserIdsText", gateway))}</textarea>
           <input class="${Object.prototype.hasOwnProperty.call(draftState.draft, "apiKey") ? "is-dirty" : ""}" data-field="apiKey" type="password" value="${escapeHtml(rowInputValue("gateways", gateway.id, "apiKey", gateway))}" placeholder="${gateway.apiKeyConfigured ? "留空则保持当前 Key，不留明文回显" : "填写真实 API Key"}" />
         </div>
       </td>
@@ -1570,6 +1616,8 @@ function closeCreatedCodesPopover() {
 function showGatewayDetail(id) {
   const gateway = state.gateways.find((item) => item.id === id);
   if (!gateway) return;
+  const accessText = gatewayAccessLabel(gateway);
+  const accessUsers = (gateway.exclusiveUsers || []).map((user) => `${user.email || user.id}${user.name ? ` / ${user.name}` : ""}`).join("\n");
   openDrawer(gateway.name, `${gateway.provider} · ${gateway.model}`, `
     <div class="detail-section">
       <h3>调度信息</h3>
@@ -1585,6 +1633,8 @@ function showGatewayDetail(id) {
       ${fieldRow("测试路径", gateway.healthCheckPath || "/models")}
       ${fieldRow("生成路径", gateway.generationPath || "/images/generations")}
       ${fieldRow("上游分组", gateway.upstreamGroup || "-")}
+      ${fieldRow("可用用户", accessText)}
+      ${accessUsers ? `<pre class="json-block">${escapeHtml(accessUsers)}</pre>` : ""}
       ${fieldRow("API Key", gateway.apiKey || (gateway.apiKeyConfigured ? "已配置" : "-"))}
       ${fieldRow("最近检测", formatDate(gateway.lastCheckedAt))}
       ${fieldRow("最近成功", formatDate(gateway.lastSuccessAt))}
@@ -1622,6 +1672,7 @@ function showGatewayMenu(id) {
       ${fieldRow("最近延迟", formatLatency(gateway.lastLatencyMs))}
       ${fieldRow("最近检测", formatDate(gateway.lastCheckedAt))}
       ${fieldRow("错误", gateway.lastError || "-")}
+      ${fieldRow("可用用户", gatewayAccessLabel(gateway))}
     </div>
     <div class="detail-section">
       <h3>调度参数</h3>
@@ -1891,6 +1942,7 @@ function rowPatch(row) {
   ["healthCheckPath", "generationPath", "upstreamGroup"].forEach((key) => {
     if (patch[key] !== undefined) patch[key] = String(patch[key] || "").trim();
   });
+  if (patch.exclusiveUserIdsText !== undefined) patch.exclusiveUserIdsText = String(patch.exclusiveUserIdsText || "").trim();
   return patch;
 }
 
@@ -1911,7 +1963,7 @@ function isMaskedApiKey(value) {
 }
 
 function gatewayTestMessage(response) {
-  if (response.ok) return `测试成功 · ${formatLatency(response.latencyMs)}`;
+  if (response.ok) return response.note ? `${response.note} · ${formatLatency(response.latencyMs)}` : `测试成功 · ${formatLatency(response.latencyMs)}`;
   return `测试失败${response.error ? `：${response.error}` : ""}`;
 }
 
@@ -2431,6 +2483,10 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+$("gatewayForm").elements.provider.addEventListener("change", (event) => {
+  applyGatewayProviderDefaults(event.target.form);
+});
+
 $("gatewayForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2445,6 +2501,7 @@ $("gatewayForm").addEventListener("submit", async (event) => {
       data.timeoutMs = Number(data.timeoutMs || 0);
       data.priority = Number(data.priority || 0);
       data.enabled = data.enabled === "true";
+      data.exclusiveUserIdsText = String(data.exclusiveUserIdsText || "").trim();
       validateGatewayPayload(data);
       await api("/api/admin/gateways", { method: "POST", body: JSON.stringify(data) });
       form.reset();
