@@ -8,6 +8,7 @@ import com.gptnet.image.service.UpstreamClient.Part;
 import com.gptnet.image.support.AppException;
 import com.gptnet.image.support.Maps;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Types;
@@ -15,8 +16,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -46,6 +49,7 @@ public class ImageService {
   private final String storageRoot;
   private final int failureThreshold;
   private final long cooldownMs;
+  private final List<String> formatFieldHosts;
 
   public ImageService(
     Db db,
@@ -58,7 +62,8 @@ public class ImageService {
     TransactionTemplate transactions,
     @Value("${LOCAL_STORAGE_DIR:storage}") String storageRoot,
     @Value("${GATEWAY_FAILURE_THRESHOLD:30}") int failureThreshold,
-    @Value("${GATEWAY_COOLDOWN_MS:300000}") long cooldownMs
+    @Value("${GATEWAY_COOLDOWN_MS:300000}") long cooldownMs,
+    @Value("${UPSTREAM_FORMAT_FIELD_HOSTS:}") String formatFieldHosts
   ) {
     this.db = db;
     this.security = security;
@@ -71,6 +76,8 @@ public class ImageService {
     this.storageRoot = storageRoot;
     this.failureThreshold = failureThreshold;
     this.cooldownMs = cooldownMs;
+    this.formatFieldHosts = Stream.of(formatFieldHosts.split(","))
+      .map(String::trim).filter(host -> !host.isEmpty()).map(host -> host.toLowerCase(Locale.ROOT)).toList();
   }
 
   @Transactional
@@ -844,7 +851,7 @@ public class ImageService {
   private Map<String, Object> imageGenerationRequestBody(String url, ImageTask task, int n) {
     String format = "jpg".equals(task.outputFormat()) ? "jpeg" : task.outputFormat();
     boolean requestUrlResponse = shouldRequestUrlResponse(url, task.model());
-    if (isSuperApiImageGenerationUrl(url)) {
+    if (isFormatFieldImageGenerationUrl(url)) {
       Map<String, Object> body = Maps.of(
         "model", task.model(),
         "prompt", task.prompt(),
@@ -869,9 +876,14 @@ public class ImageService {
     return body;
   }
 
-  private boolean isSuperApiImageGenerationUrl(String url) {
-    String normalized = Optional.ofNullable(url).orElse("").toLowerCase();
-    return normalized.contains("api.superapi.me") && normalized.contains("/images/generations");
+  private boolean isFormatFieldImageGenerationUrl(String url) {
+    try {
+      URI uri = URI.create(Optional.ofNullable(url).orElse(""));
+      return uri.getHost() != null && formatFieldHosts.contains(uri.getHost().toLowerCase(Locale.ROOT))
+        && Optional.ofNullable(uri.getPath()).orElse("").contains("/images/generations");
+    } catch (IllegalArgumentException exception) {
+      return false;
+    }
   }
 
   private boolean shouldRequestUrlResponse(String url, String model) {

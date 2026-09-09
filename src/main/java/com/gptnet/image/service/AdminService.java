@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
@@ -43,8 +44,6 @@ public class AdminService {
   private static final int MAX_CALL_SQUARE_REFERENCE_IMAGES = 16;
   private static final long MAX_CALL_SQUARE_REFERENCE_IMAGE_BYTES = 50L * 1024L * 1024L;
   private static final int MAX_CALL_SQUARE_TIMEOUT_MS = 20 * 60 * 1000;
-  private static final String DEFAULT_CALL_SQUARE_URL = "https://api.superapi.me/v1/images/generations";
-  private static final String LEGACY_CALL_SQUARE_URL = "https://api.superapi.me/v1/chat/completions";
   private static final String CALL_SQUARE_CONFIG_KEY = "call_square_config";
   private static final String CALL_SQUARE_API_KEY_KEY = "call_square_api_key";
   private static final String DEFAULT_USER_WARNING_MESSAGE = "系统检测到你的账号可能存在涉嫌欺诈或其他涉嫌违法违规的行为。请立即停止相关操作并遵守平台规则；如再次或多次出现类似行为，平台将封禁账号。";
@@ -65,14 +64,21 @@ public class AdminService {
   private final ImageService imageService;
   private final UpstreamClient upstream;
   private final OutboundUrlPolicy outboundUrlPolicy;
+  private final String defaultCallSquareUrl;
+  private final String legacyCallSquareUrl;
 
-  public AdminService(Db db, SecurityService security, AuthService auth, ImageService imageService, UpstreamClient upstream, OutboundUrlPolicy outboundUrlPolicy) {
+  public AdminService(Db db, SecurityService security, AuthService auth, ImageService imageService, UpstreamClient upstream, OutboundUrlPolicy outboundUrlPolicy,
+    @Value("${CALL_SQUARE_DEFAULT_URL:}") String defaultCallSquareUrl,
+    @Value("${CALL_SQUARE_LEGACY_URL:}") String legacyCallSquareUrl
+  ) {
     this.db = db;
     this.security = security;
     this.auth = auth;
     this.imageService = imageService;
     this.upstream = upstream;
     this.outboundUrlPolicy = outboundUrlPolicy;
+    this.defaultCallSquareUrl = defaultCallSquareUrl.trim();
+    this.legacyCallSquareUrl = legacyCallSquareUrl.trim();
   }
 
   public Map<String, Object> summary() {
@@ -546,7 +552,7 @@ public class AdminService {
     String requestBody = stringConfig(config, "requestBody", "");
     if (requestBody.isBlank()) requestBody = legacyCallSquareRequestBody(config);
     Map<String, Object> result = new LinkedHashMap<>();
-    result.put("url", normalizeCallSquareConfigUrl(stringConfig(config, "url", DEFAULT_CALL_SQUARE_URL)));
+    result.put("url", normalizeCallSquareConfigUrl(stringConfig(config, "url", defaultCallSquareUrl)));
     result.put("upstreamGroup", stringConfig(config, "upstreamGroup", ""));
     result.put("requestBody", requestBody);
     result.put("timeoutMs", intConfig(config, "timeoutMs", 90000));
@@ -1163,8 +1169,8 @@ public class AdminService {
   }
 
   private String normalizeCallSquareConfigUrl(String value) {
-    if (LEGACY_CALL_SQUARE_URL.equalsIgnoreCase(Optional.ofNullable(value).orElse("").trim())) {
-      return DEFAULT_CALL_SQUARE_URL;
+    if (!legacyCallSquareUrl.isBlank() && legacyCallSquareUrl.equalsIgnoreCase(Optional.ofNullable(value).orElse("").trim())) {
+      return defaultCallSquareUrl;
     }
     return value;
   }

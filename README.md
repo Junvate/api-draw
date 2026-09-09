@@ -23,6 +23,16 @@ If you need an initial admin, set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` b
 
 The Spring Boot service in `src/main/java/com/gptnet/image/GptnetImageApplication.java` is the supported runtime path. Flyway initializes the PostgreSQL schema automatically on startup.
 
+## Private Configuration
+
+Keep real gateway addresses, API keys, database credentials, and session secrets in the ignored `.env` file or deployment environment. Gateway records and encrypted keys configured in `/admin` remain in PostgreSQL; do not commit database exports or admin screenshots. Local data, storage, backups, and `tmp/` are excluded from Git.
+
+Optional private settings (also forwarded by Docker Compose):
+
+- `CALL_SQUARE_DEFAULT_URL`: initial endpoint for the admin call tester; blank by default.
+- `CALL_SQUARE_LEGACY_URL`: an old tester endpoint to map to the configured default.
+- `UPSTREAM_FORMAT_FIELD_HOSTS`: comma-separated exact hostnames of gateways requiring `format` instead of `output_format` in image generation requests; empty by default.
+
 ## Docker One-Click Deployment
 
 The compose stack includes the app, PostgreSQL, Redis, and persistent Docker volumes. Only the app port is bound to `127.0.0.1` on the host for reverse proxying; PostgreSQL and Redis stay on the Docker network.

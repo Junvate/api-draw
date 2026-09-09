@@ -233,7 +233,7 @@
               <form class="form-grid channel-form-grid" id="gatewayForm">
                 <label>名称<input name="name" placeholder="例如：new-api 主入口" required /></label>
                 <label>类型<select name="provider"><option value="openai">OpenAI 兼容</option><option value="fal">fal.ai</option></select></label>
-                <label>Base URL<input name="baseUrl" value="https://api.openai.com/v1" placeholder="例如：https://api.chatgpt-code.com" /></label>
+                <label>Base URL<input name="baseUrl" value="https://api.openai.com/v1" placeholder="例如：https://api.example.com/v1" /></label>
                   <label>API Key<input name="apiKey" type="password" placeholder="直接填写渠道的真实 API Key" /></label>
                 <label>测试路径<input name="healthCheckPath" value="/models" placeholder="/pg/chat/completions" /></label>
                 <label>生成路径<input name="generationPath" value="/images/generations" placeholder="/pg/images/generations" /></label>
@@ -297,7 +297,7 @@
               <div class="call-square-body">
                 <form class="call-square-form" id="callSquareForm" autocomplete="off">
                   <label class="call-square-url">URL
-                    <input name="url" value="https://api.superapi.me/v1/images/generations" placeholder="https://api.superapi.me/v1/images/generations" inputmode="url" required />
+                    <input name="url" value="" placeholder="https://api.example.com/v1/images/generations" inputmode="url" required />
                   </label>
                   <label>API Key
                     <input name="apiKey" type="password" placeholder="sk-..." autocomplete="off" required />

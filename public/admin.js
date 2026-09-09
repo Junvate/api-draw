@@ -7,7 +7,7 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_CALL_SQUARE_CONFIG = {
-  url: "https://api.superapi.me/v1/images/generations",
+  url: "",
   apiKey: "",
   upstreamGroup: "",
   requestBody: `{
